@@ -1,0 +1,60 @@
+name: Kortex validation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Rust stable pinned
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: PostgreSQL TLS on Windows
+        run: ./scripts/Test-PgMatrix.ps1 -Major '17' -Tls
+      - name: Performance regression
+        run: cargo test --release -p kortex-supervisor -p kortex-infrastructure --test performance --locked -- --ignored --nocapture
+      - name: Dependency audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+      - name: Portable Windows package
+        run: ./scripts/Build-Release.ps1
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: Kortex-Supervisor-windows-x64
+          path: dist/Kortex-Supervisor-windows-x64.zip
+
+  postgres:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        postgres: ['16', '17', '18']
+    services:
+      database:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: kortex
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: postgres
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U kortex -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - name: PostgreSQL contracts
+        env:
+          KORTEX_TEST_PG_PORT: ${{ job.services.database.ports[5432] }}
+        run: cargo test -p kortex-infrastructure --test postgres --locked -- --ignored --nocapture

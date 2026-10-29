@@ -1,0 +1,6 @@
+/target/
+/dist/
+/.test-data/
+*.db-wal
+*.db-shm
+*.log
