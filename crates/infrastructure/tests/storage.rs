@@ -2,6 +2,21 @@ use kortex_domain::*;
 use kortex_infrastructure::storage::{self, Preferences};
 
 #[test]
+fn old_preferences_choose_default_appearance() {
+    use kortex_infrastructure::storage::{DiagramTheme, LegendStyle};
+    let prefs: Preferences = serde_json::from_str(r#"{"version":1}"#).unwrap();
+    assert_eq!(prefs.appearance.diagram_theme, DiagramTheme::Modern);
+    assert_eq!(prefs.appearance.legend_style, LegendStyle::Compact);
+    let updated = storage::Appearance {
+        diagram_theme: DiagramTheme::Midnight,
+        legend_style: LegendStyle::Detailed,
+    };
+    let restored: storage::Appearance =
+        serde_json::from_str(&serde_json::to_string(&updated).unwrap()).unwrap();
+    assert_eq!(restored, updated);
+}
+
+#[test]
 fn atomic_replace_round_trip_and_unknown_version_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("workspace.json");

@@ -7,7 +7,7 @@ fn cpu_worker_returns_the_revision_and_stops_when_dropped() {
     assert!(worker.submit(LayoutRequest {
         revision: 42,
         input: LayoutInput::default(),
-        arrange: true
+        arrange: Some(LayoutProfile::Compact)
     }));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {

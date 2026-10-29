@@ -38,6 +38,13 @@ La CI est fournie mais n’a pas été exécutée sur GitHub pendant cette livra
 - Paquet portable contrôlé nativement avec la base de démonstration et des préférences isolées : affichage du MCD, sélection Ctrl+A, ouverture/fermeture d’une fenêtre détachée, zoom indépendant à 53 %, loupe lisible et sélection rectangulaire d’une table dans le brouillon de groupe. Le lancement dans le sandbox produisait `foreground window did not report a process id` ; le contrôle a pu être effectué hors du sandbox. Le changement de moniteur et les autres facteurs DPI restent à vérifier ; les tests egui ne remplacent pas ces contrôles.
 - Un premier lancement de la suite parallèle a dépassé la mémoire du linker (`LNK1102`) ; la suite et la CI Windows utilisent désormais `-j 1`. Les tests de stockage utilisent ici `TEMP`/`TMP` dirigés vers `target` pour éviter un refus d’accès au dossier temporaire du sandbox. Les avertissements de copie du cache incrémental ne sont pas des avertissements Clippy du code.
 
+## Validation des améliorations MCD du 29 octobre 2026
+
+- Suite rapide : 59 tests réussis et quatre tests spécialisés ignorés ; un test supplémentaire de contour a ensuite été exécuté avec succès. Les nouveaux tests couvrent les profils de disposition, les groupes partagés et leur historique, la sélection par le corps, la priorité de la barre d’outils, les relations entrantes et sortantes, la saturation des cardinalités et la compatibilité des préférences.
+- `cargo fmt --all -- --check` et Clippy avec `-D warnings` réussis. Les captures des deux thèmes MCD, de la légende détaillée et des autres vues modifiées ont été examinées.
+- Les fenêtres natives, le plein écran et les changements de moniteur ou de DPI restent à vérifier manuellement sur la nouvelle version ; les tests egui couvrent le périmètre partagé des fenêtres mais ne simulent pas le gestionnaire de fenêtres Windows.
+- La mesure de performance release a été interrompue pendant la compilation optimisée et n’a pas produit de résultat pour cette version.
+
 ## Limites explicites du MVP
 
 - Les fichiers `.db` doivent être des bases SQLite non chiffrées. SQLCipher et les autres moteurs utilisant cette extension ne sont pas pris en charge.

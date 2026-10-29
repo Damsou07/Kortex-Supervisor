@@ -21,8 +21,8 @@ impl DiagramWorker {
                 while let Ok(next) = receiver.try_recv() {
                     request = next;
                 }
-                let geometry = if request.arrange {
-                    kortex_domain::arrange_diagram(&request.input)
+                let geometry = if let Some(profile) = request.arrange {
+                    kortex_domain::arrange_diagram_with_profile(&request.input, profile)
                 } else {
                     kortex_domain::route_diagram(&request.input)
                 };

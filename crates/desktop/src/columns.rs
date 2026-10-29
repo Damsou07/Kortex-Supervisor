@@ -197,14 +197,26 @@ pub fn paint_badge(painter: &Painter, origin: egui::Pos2, role: ColumnRole, scal
     let stroke = Stroke::new((1.1 * scale).max(0.3), role.color());
     match role {
         ColumnRole::Primary => {
-            painter.circle_stroke(p(4.0, 6.0), 2.7 * scale, stroke);
-            painter.line_segment([p(6.5, 6.0), p(12.0, 6.0)], stroke);
-            painter.line_segment([p(10.0, 6.0), p(10.0, 9.0)], stroke);
+            painter.add(egui::Shape::closed_line(
+                vec![
+                    p(3.5, 1.0),
+                    p(6.5, 3.5),
+                    p(6.5, 6.5),
+                    p(3.5, 9.0),
+                    p(0.5, 6.5),
+                    p(0.5, 3.5),
+                ],
+                stroke,
+            ));
+            painter.circle_filled(p(3.5, 5.0), 0.9 * scale, role.color());
+            painter.line_segment([p(6.5, 5.0), p(12.0, 5.0)], stroke);
+            painter.line_segment([p(9.0, 5.0), p(9.0, 8.0)], stroke);
+            painter.line_segment([p(11.0, 5.0), p(11.0, 7.0)], stroke);
         }
         ColumnRole::Foreign => {
-            painter.line_segment([p(2.0, 9.0), p(11.0, 2.0)], stroke);
-            painter.line_segment([p(6.0, 2.0), p(11.0, 2.0)], stroke);
-            painter.line_segment([p(11.0, 2.0), p(11.0, 7.0)], stroke);
+            painter.circle_stroke(p(3.0, 8.0), 2.3 * scale, stroke);
+            painter.circle_stroke(p(9.0, 3.0), 2.3 * scale, stroke);
+            painter.line_segment([p(4.5, 6.5), p(7.5, 4.5)], stroke);
         }
         ColumnRole::Unique => {
             painter.add(egui::Shape::closed_line(
@@ -352,7 +364,22 @@ pub fn header(ui: &mut Ui, table: &Table, column: &Column, enabled: bool) -> Res
 
 pub fn legend(ui: &mut Ui) {
     ui.menu_button("Légende", |ui| {
-        for (label, family) in [
+        let mut appearance = theme::appearance(ui.ctx());
+        ui.horizontal(|ui| {
+            ui.selectable_value(
+                &mut appearance.legend_style,
+                kortex_infrastructure::storage::LegendStyle::Compact,
+                "Compacte",
+            );
+            ui.selectable_value(
+                &mut appearance.legend_style,
+                kortex_infrastructure::storage::LegendStyle::Detailed,
+                "Détaillée",
+            );
+        });
+        theme::set_appearance(ui.ctx(), appearance);
+        ui.separator();
+        let families = [
             ("Nombres", TypeFamily::Number),
             ("Textes", TypeFamily::Text),
             ("Booléens", TypeFamily::Boolean),
@@ -361,8 +388,27 @@ pub fn legend(ui: &mut Ui) {
             ("JSON", TypeFamily::Json),
             ("Binaires", TypeFamily::Binary),
             ("Autres types", TypeFamily::Other),
-        ] {
-            ui.colored_label(family.color(), label);
+        ];
+        if appearance.legend_style == kortex_infrastructure::storage::LegendStyle::Compact {
+            ui.set_max_width(300.0);
+            ui.horizontal_wrapped(|ui| {
+                for (label, family) in families {
+                    egui::Frame::new()
+                        .fill(family.color().gamma_multiply(0.16))
+                        .corner_radius(7)
+                        .inner_margin(egui::Margin::symmetric(6, 3))
+                        .show(ui, |ui| {
+                            ui.colored_label(family.color(), format!("● {label}"));
+                        });
+                }
+            });
+        } else {
+            for (label, family) in families {
+                ui.horizontal(|ui| {
+                    ui.colored_label(family.color(), "●");
+                    ui.label(label);
+                });
+            }
         }
         ui.separator();
         for (role, label) in [

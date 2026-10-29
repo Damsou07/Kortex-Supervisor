@@ -240,7 +240,22 @@ fn ranks(n: usize, edges: &[(usize, usize)]) -> Vec<usize> {
     }
     t.component.iter().map(|&c| rank[c]).collect()
 }
-fn layered(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayoutProfile {
+    #[default]
+    Compact,
+    Spacious,
+}
+impl LayoutProfile {
+    fn spacing(self) -> f32 {
+        match self {
+            Self::Compact => 1.0,
+            Self::Spacious => 2.0,
+        }
+    }
+}
+
+fn layered(nodes: &[LayoutNode], edges: &[(usize, usize)], spacing: f32) -> Vec<Point> {
     if nodes.is_empty() {
         return vec![];
     }
@@ -291,7 +306,7 @@ fn layered(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
     let mut result = vec![Point::default(); nodes.len()];
     let area: f32 = nodes
         .iter()
-        .map(|n| (n.rect.size.x + 48.0) * (n.rect.size.y + 32.0))
+        .map(|n| (n.rect.size.x + 48.0 * spacing) * (n.rect.size.y + 32.0 * spacing))
         .sum();
     let target_height = (area / 1.6)
         .sqrt()
@@ -303,19 +318,19 @@ fn layered(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
         let mut local = vec![];
         for &i in layer {
             if y > 0.0 && y + nodes[i].rect.size.y > target_height {
-                local_x += width + 48.0;
+                local_x += width + 48.0 * spacing;
                 y = 0.0;
                 width = 0.0;
             }
             local.push((i, Point { x: local_x, y }));
-            y += nodes[i].rect.size.y + 32.0;
-            height = height.max(y - 32.0);
+            y += nodes[i].rect.size.y + 32.0 * spacing;
+            height = height.max(y - 32.0 * spacing);
             width = width.max(nodes[i].rect.size.x);
         }
         let layer_width = local_x + width;
         if x > 0.0 && x + layer_width > target_width {
             x = 0.0;
-            band_y += band_height + 64.0;
+            band_y += band_height + 64.0 * spacing;
             band_height = 0.0;
         }
         for (i, p) in local {
@@ -324,13 +339,13 @@ fn layered(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
                 y: band_y + p.y,
             };
         }
-        x += layer_width + 48.0;
+        x += layer_width + 48.0 * spacing;
         band_height = band_height.max(height);
     }
     result
 }
 /// Pack disconnected components instead of making a single, very tall layer.
-fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
+fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)], spacing: f32) -> Vec<Point> {
     let n = nodes.len();
     let mut seen = vec![false; n];
     let mut components = vec![];
@@ -362,7 +377,7 @@ fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
     }
     let area: f32 = nodes
         .iter()
-        .map(|n| (n.rect.size.x + 48.0) * (n.rect.size.y + 32.0))
+        .map(|n| (n.rect.size.x + 48.0 * spacing) * (n.rect.size.y + 32.0 * spacing))
         .sum();
     let shelf_width = (area * 1.6).sqrt().max(1200.0);
     let mut result = vec![Point::default(); n];
@@ -374,7 +389,7 @@ fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
             .iter()
             .filter_map(|(a, b)| Some((*map.get(a)?, *map.get(b)?)))
             .collect();
-        let points = layered(&local, &links);
+        let points = layered(&local, &links, spacing);
         let (width, height) = local
             .iter()
             .zip(&points)
@@ -383,7 +398,7 @@ fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
             });
         if x > 0.0 && x + width > shelf_width {
             x = 0.0;
-            y += shelf_h + 64.0;
+            y += shelf_h + 64.0 * spacing;
             shelf_h = 0.0;
         }
         for (&i, p) in component.iter().zip(points) {
@@ -392,13 +407,14 @@ fn place_graph(nodes: &[LayoutNode], edges: &[(usize, usize)]) -> Vec<Point> {
                 y: p.y + y,
             };
         }
-        x += width + 64.0;
+        x += width + 64.0 * spacing;
         shelf_h = shelf_h.max(height);
     }
     result
 }
 
-fn position_diagram(input: &LayoutInput) -> LayoutInput {
+fn position_diagram(input: &LayoutInput, profile: LayoutProfile) -> LayoutInput {
+    let spacing = profile.spacing();
     let mut next = input.clone();
     next.manual.retain(|id, _| {
         input.edges.iter().any(|e| {
@@ -454,9 +470,12 @@ fn position_diagram(input: &LayoutInput) -> LayoutInput {
             .iter()
             .filter_map(|e| Some((*map.get(e.source.as_str())?, *map.get(e.target.as_str())?)))
             .collect();
-        let points = place_graph(&local, &links);
+        let points = place_graph(&local, &links, spacing);
         let padding = if members.len() > 1 {
-            Point { x: 32.0, y: 48.0 }
+            Point {
+                x: 32.0 * spacing,
+                y: 48.0 * spacing,
+            }
         } else {
             Point::default()
         };
@@ -467,7 +486,7 @@ fn position_diagram(input: &LayoutInput) -> LayoutInput {
                 y: p.y + padding.y,
             };
             size.x = size.x.max(p.x + node.rect.size.x + padding.x);
-            size.y = size.y.max(p.y + node.rect.size.y + 32.0);
+            size.y = size.y.max(p.y + node.rect.size.y + 32.0 * spacing);
             local_positions.insert(node.id.clone(), p);
             block_of.insert(node.id.clone(), block);
         }
@@ -487,12 +506,12 @@ fn position_diagram(input: &LayoutInput) -> LayoutInput {
             (a != b).then_some((a, b))
         })
         .collect();
-    let mut block_positions = place_graph(&macro_nodes, &links);
+    let mut block_positions = place_graph(&macro_nodes, &links, spacing);
     let mut occupied: Vec<_> = input
         .nodes
         .iter()
         .filter(|n| input.fixed.contains(&n.id))
-        .map(|n| n.rect.expanded(16.0))
+        .map(|n| n.rect.expanded(16.0 * spacing))
         .collect();
     for (i, p) in block_positions.iter_mut().enumerate() {
         p.x += 48.0;
@@ -504,12 +523,12 @@ fn position_diagram(input: &LayoutInput) -> LayoutInput {
             };
             let overlaps: Vec<_> = occupied.iter().filter(|r| r.intersects(&rect)).collect();
             if overlaps.is_empty() {
-                occupied.push(rect.expanded(16.0));
+                occupied.push(rect.expanded(16.0 * spacing));
                 break;
             }
             p.y = overlaps
                 .iter()
-                .map(|r| r.bottom() + 32.0)
+                .map(|r| r.bottom() + 32.0 * spacing)
                 .fold(p.y, f32::max);
         }
     }
@@ -525,14 +544,17 @@ fn position_diagram(input: &LayoutInput) -> LayoutInput {
     next
 }
 pub fn place_diagram(input: &LayoutInput) -> BTreeMap<String, Point> {
-    position_diagram(input)
+    position_diagram(input, LayoutProfile::Compact)
         .nodes
         .into_iter()
         .map(|n| (n.id, n.rect.origin))
         .collect()
 }
 pub fn arrange_diagram(input: &LayoutInput) -> LayoutResult {
-    route_diagram(&position_diagram(input))
+    arrange_diagram_with_profile(input, LayoutProfile::Compact)
+}
+pub fn arrange_diagram_with_profile(input: &LayoutInput, profile: LayoutProfile) -> LayoutResult {
+    route_diagram(&position_diagram(input, profile))
 }
 
 // A shared occupancy grid makes obstacle checks O(1) during each orthogonal search.

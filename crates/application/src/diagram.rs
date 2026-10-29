@@ -4,7 +4,7 @@ use kortex_domain::*;
 pub struct LayoutRequest {
     pub revision: u64,
     pub input: LayoutInput,
-    pub arrange: bool,
+    pub arrange: Option<LayoutProfile>,
 }
 pub struct LayoutReply {
     pub revision: u64,
@@ -76,6 +76,37 @@ pub fn remove_group(id: u64, diagram: &mut Diagram, history: &mut LayoutHistory)
 }
 pub fn reframe_groups(catalog: &Catalog, diagram: &mut Diagram) {
     reframe(catalog, diagram, None);
+}
+/// Move members and adjust every group affected by the movement.
+/// The caller records the diagram once at the beginning of a drag.
+pub fn move_tables(catalog: &Catalog, diagram: &mut Diagram, ids: &[String], delta: Point) {
+    diagram.move_tables(ids, delta);
+    reframe_affected(catalog, diagram, ids);
+}
+
+pub fn move_group(catalog: &Catalog, diagram: &mut Diagram, id: u64, delta: Point) {
+    let Some(members) = diagram
+        .groups
+        .iter()
+        .find(|g| g.id == id)
+        .map(|g| g.members.clone())
+    else {
+        return;
+    };
+    diagram.move_group(id, delta);
+    reframe_affected(catalog, diagram, &members);
+}
+
+fn reframe_affected(catalog: &Catalog, diagram: &mut Diagram, ids: &[String]) {
+    let affected: Vec<_> = diagram
+        .groups
+        .iter()
+        .filter(|g| g.members.iter().any(|member| ids.contains(member)))
+        .map(|g| g.id)
+        .collect();
+    for id in affected {
+        reframe(catalog, diagram, Some(id));
+    }
 }
 fn reframe(catalog: &Catalog, diagram: &mut Diagram, only: Option<u64>) {
     let input = LayoutInput::new(catalog, diagram);

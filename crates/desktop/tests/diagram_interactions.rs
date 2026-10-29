@@ -8,6 +8,85 @@ struct State {
     history: LayoutHistory,
     view: DiagramView,
 }
+
+#[test]
+fn pan_mode_selects_table_by_its_body_and_header_can_be_dragged() {
+    let catalog = Catalog {
+        tables: vec![Table {
+            stable_id: "t".into(),
+            id: ObjectId::new("main", "table"),
+            columns: vec![Column::new("id", "integer", false)],
+            ..Table::default()
+        }],
+        ..Catalog::default()
+    };
+    let mut layout = Diagram::default();
+    layout
+        .positions
+        .insert("t".into(), Point { x: 50.0, y: 50.0 });
+    let mut view = DiagramView::default();
+    view.fit = false;
+    view.zoom = 1.0;
+    view.prepare_geometry(&catalog, &layout);
+    let mut initialized = false;
+    let mut harness = Harness::builder()
+        .with_size([1100.0, 700.0])
+        .build_ui_state(
+            move |ui, state: &mut State| {
+                if !initialized {
+                    kortex_supervisor::theme::apply(ui.ctx());
+                    initialized = true;
+                }
+                mcd::show(
+                    ui,
+                    &state.catalog,
+                    &mut state.layout,
+                    &mut state.history,
+                    &mut state.view,
+                    None,
+                );
+            },
+            State {
+                catalog,
+                layout,
+                history: LayoutHistory::default(),
+                view,
+            },
+        );
+    harness.run();
+    let canvas = harness.state().view.canvas;
+    let body = canvas.min + egui::vec2(80.0, 105.0);
+    harness.event(egui::Event::PointerMoved(body));
+    harness.event(egui::Event::PointerButton {
+        pos: body,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: body,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    assert!(harness.state().view.selected.contains("t"));
+    let header = canvas.min + egui::vec2(80.0, 60.0);
+    harness.drag_at(header);
+    harness.step();
+    harness.hover_at(header + egui::vec2(50.0, 0.0));
+    harness.step();
+    harness.drop_at(header + egui::vec2(50.0, 0.0));
+    harness.run();
+    assert!(harness.state().layout.positions["t"].x > 50.0);
+    // A table extending above the canvas must not intercept the toolbar.
+    harness.state_mut().layout.positions.get_mut("t").unwrap().y = -55.0;
+    harness.run();
+    harness.get_by_label("Sélection").click();
+    harness.run();
+    assert!(matches!(harness.state().view.mode, InteractionMode::Select));
+}
 #[test]
 fn rectangle_selects_tables_without_selecting_a_relation() {
     let mut catalog = Catalog::default();
@@ -134,6 +213,87 @@ fn has_text(shape: &egui::epaint::Shape, text: &str) -> bool {
         egui::epaint::Shape::Vec(children) => children.iter().any(|s| has_text(s, text)),
         _ => false,
     }
+}
+
+#[test]
+fn selection_outline_covers_header_and_body_and_is_painted_after_header() {
+    let catalog = Catalog {
+        tables: vec![Table {
+            stable_id: "t".into(),
+            id: ObjectId::new("main", "table"),
+            columns: vec![Column::new("id", "integer", false)],
+            ..Table::default()
+        }],
+        ..Catalog::default()
+    };
+    let mut layout = Diagram::default();
+    layout
+        .positions
+        .insert("t".into(), Point { x: 50.0, y: 50.0 });
+    let mut view = DiagramView::default();
+    view.fit = false;
+    view.zoom = 1.0;
+    view.selected.insert("t".into());
+    view.prepare_geometry(&catalog, &layout);
+    let mut initialized = false;
+    let mut harness = Harness::builder()
+        .with_size([1100.0, 700.0])
+        .build_ui_state(
+            move |ui, state: &mut State| {
+                if !initialized {
+                    kortex_supervisor::theme::apply(ui.ctx());
+                    initialized = true;
+                }
+                mcd::show(
+                    ui,
+                    &state.catalog,
+                    &mut state.layout,
+                    &mut state.history,
+                    &mut state.view,
+                    None,
+                );
+            },
+            State {
+                catalog,
+                layout,
+                history: LayoutHistory::default(),
+                view,
+            },
+        );
+    harness.run();
+
+    let top_left = harness.state().view.canvas.min + egui::vec2(50.0, 50.0);
+    let height = LayoutInput::new(&harness.state().catalog, &harness.state().layout).nodes[0]
+        .rect
+        .size
+        .y;
+    let table_rect = egui::Rect::from_min_size(top_left, egui::vec2(TABLE_WIDTH, height));
+    let header_rect = egui::Rect::from_min_size(top_left, egui::vec2(TABLE_WIDTH, 36.0));
+    let rects: Vec<_> = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Rect(rect) => Some(rect),
+            _ => None,
+        })
+        .collect();
+    let header_index = rects
+        .iter()
+        .position(|shape| shape.rect == header_rect && shape.fill != egui::Color32::TRANSPARENT)
+        .expect("table header fill must be painted");
+    let outline_index = rects
+        .iter()
+        .position(|shape| {
+            shape.rect == table_rect
+                && shape.stroke.width == 2.0
+                && shape.stroke.color == kortex_supervisor::theme::YELLOW
+        })
+        .expect("selection outline must enclose the full table");
+    assert!(
+        outline_index > header_index,
+        "the header must not cover the selection outline"
+    );
 }
 
 #[test]

@@ -57,7 +57,7 @@ struct Detached {
     id: u64,
     connection: String,
     title: String,
-    members: Vec<String>,
+    members: Option<Vec<String>>,
     view: DiagramView,
 }
 #[derive(Clone)]
@@ -209,6 +209,7 @@ impl KortexApp {
             Ok(p) => (p, None),
             Err(e) => (Preferences::default(), Some(e.to_string())),
         };
+        theme::set_appearance(ctx, prefs.appearance);
         let mut app = Self::with_preferences(prefs);
         // A corrupt or newer configuration must never be overwritten by defaults.
         if error.is_none() {
@@ -925,6 +926,7 @@ impl KortexApp {
         self.settings_dialog(&ctx);
         self.close_dialogs(&ctx);
         self.show_detached(&ctx);
+        self.prefs.appearance = theme::appearance(&ctx);
         self.process_actions(&ctx);
         if self.last_save.elapsed() > Duration::from_secs(5) && !ctx.input(|i| i.pointer.any_down())
         {
@@ -1192,7 +1194,12 @@ impl KortexApp {
             self.actions
                 .push(Action::OpenTable(connection.clone(), stable));
         }
-        if let Some((title, members)) = action.detach {
+        let detached = if action.detach_full {
+            Some(("MCD complet".to_owned(), None))
+        } else {
+            action.detach.map(|(title, members)| (title, Some(members)))
+        };
+        if let Some((title, members)) = detached {
             let id = self.id();
             self.detached.push(Detached {
                 id,
@@ -1432,23 +1439,49 @@ impl KortexApp {
                     egui::ViewportId::from_hash_of(("mcd", window.id)),
                     egui::ViewportBuilder::default()
                         .with_title(format!("{} — Kortex MCD", window.title))
-                        .with_inner_size([1100.0, 740.0]),
+                        .with_inner_size([1100.0, 740.0])
+                        .with_maximized(window.members.is_none()),
                     |ui, _| {
                         if ui.ctx().input(|i| i.viewport().close_requested()) {
                             open = false;
                         }
                         egui::CentralPanel::default().show(ui, |ui| {
+                            if window.members.is_none() {
+                                let fullscreen =
+                                    ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                                let escape = fullscreen
+                                    && !ui.ctx().text_edit_focused()
+                                    && ui.ctx().input_mut(|i| {
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                                    });
+                                if ui
+                                    .button(if fullscreen {
+                                        "Quitter le plein écran"
+                                    } else {
+                                        "Plein écran"
+                                    })
+                                    .clicked()
+                                    || escape
+                                {
+                                    ui.ctx()
+                                        .send_viewport_cmd(egui::ViewportCommand::Fullscreen(
+                                            !fullscreen,
+                                        ));
+                                }
+                            }
                             action = Some(mcd::show(
                                 ui,
                                 &conn.catalog,
                                 &mut conn.diagram,
                                 &mut conn.history,
                                 &mut window.view,
-                                Some(&window.members),
+                                window.members.as_deref(),
                             ));
                         });
                     },
                 );
+            } else {
+                open = false;
             }
             if let Some(action) = action {
                 self.diagram_action(window.connection.clone(), action);
@@ -1540,6 +1573,30 @@ fn default_layout() -> egui_tiles::Tree<Pane> {
 mod tests {
     use super::*;
     use egui_kittest::Harness;
+    #[test]
+    fn detached_full_diagram_has_unrestricted_scope_and_selection_remains_scoped() {
+        let mut app = KortexApp::for_test();
+        app.diagram_action(
+            "db".into(),
+            mcd::DiagramAction {
+                detach_full: true,
+                ..Default::default()
+            },
+        );
+        app.diagram_action(
+            "db".into(),
+            mcd::DiagramAction {
+                detach: Some(("Sélection".into(), vec!["a".into()])),
+                ..Default::default()
+            },
+        );
+        assert!(app.detached[0].members.is_none());
+        assert_eq!(
+            app.detached[1].members.as_deref(),
+            Some(["a".to_owned()].as_slice())
+        );
+        assert_ne!(app.detached[0].id, app.detached[1].id);
+    }
     #[test]
     fn keyboard_navigation_and_close_keep_the_draft_confirmation() {
         let mut app = KortexApp::for_test();

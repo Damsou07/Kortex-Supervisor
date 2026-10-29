@@ -26,9 +26,9 @@ Le paquet portable se construit avec `./scripts/Build-Release.ps1`. L’exécuta
 - Tableur paginé : tri multiple avec Maj+clic, filtres combinables, ajout et suppression de lignes, édition par double-clic sur une cellule.
 - **Appliquer** enregistre le lot dans une transaction ; **Annuler les modifications** abandonne le brouillon. Les conflits externes empêchent l’écrasement silencieux des données.
 - Éditeur SQL à sessions indépendantes : scripts, sélection, Ctrl+Entrée, insertion des objets connus, résultats multiples et annulation côté moteur.
-- MCD : disposition automatique compacte, liens orthogonaux avec arrivées séparées et ponts aux croisements, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
-- Groupes : panneau dédié, sélection rectangulaire de tables, création/modification en brouillon, couleurs et fenêtres natives partageant la disposition.
-- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD et badges vectoriels PK/FK/UQ séparés.
+- MCD : dispositions automatiques compacte et espacée, deux thèmes sombres, liens orthogonaux et cardinalités réparties, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
+- Groupes : panneau dédié, sélection rectangulaire, cadres automatiquement ajustés aux tables et fenêtres natives partageant la disposition. Le MCD complet peut aussi être ouvert maximisé ou en plein écran.
+- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD, légendes compacte ou détaillée et badges vectoriels PK/FK/UQ séparés.
 - Onglets avec fermeture intégrée et indicateur de brouillon ; catalogue des raccourcis et gestes souris dans **Paramètres → Raccourcis clavier** (**F1**).
 - Panneaux déplaçables par leur onglet et redimensionnables. Disposition et groupes enregistrés localement.
 

@@ -17,7 +17,7 @@ pub struct DiagramCache {
     worker: Option<DiagramWorker>,
     pending: Option<Pending>,
     revision: u64,
-    pub arrange: Option<Option<Vec<String>>>,
+    pub arrange: Option<(Option<Vec<String>>, LayoutProfile)>,
 }
 impl DiagramCache {
     pub fn prepare(&mut self, catalog: &Catalog, layout: &Diagram) {
@@ -62,7 +62,7 @@ impl DiagramCache {
         {
             let mut input = LayoutInput::new(catalog, layout);
             let request = self.arrange.clone();
-            let scope = request.clone().flatten();
+            let scope = request.as_ref().and_then(|(scope, _)| scope.clone());
             if let Some(scope) = &scope {
                 input.fixed = input
                     .nodes
@@ -78,7 +78,7 @@ impl DiagramCache {
                 .submit(LayoutRequest {
                     revision: self.revision,
                     input,
-                    arrange: request.is_some(),
+                    arrange: request.as_ref().map(|(_, profile)| *profile),
                 })
             {
                 self.pending = Some(Pending {
@@ -114,7 +114,7 @@ mod tests {
         let mut h = LayoutHistory::default();
         cache.update(&catalog, &mut d, &mut h, false);
         assert_eq!(cache.revision, 0);
-        cache.arrange = Some(None);
+        cache.arrange = Some((None, LayoutProfile::Compact));
         cache.update(&catalog, &mut d, &mut h, false);
         d.positions.get_mut("t").unwrap().x += 1000.0;
         let moved = d.positions.clone();

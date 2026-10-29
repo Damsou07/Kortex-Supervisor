@@ -58,3 +58,49 @@ fn invalid_group_is_a_noop_and_default_layout_is_one_undo_step() {
     assert!(history.undo(&mut layout));
     assert_eq!(layout, before);
 }
+
+#[test]
+fn moving_members_reframes_all_affected_groups_in_the_same_history_step() {
+    let catalog = Catalog {
+        tables: ["a", "b", "c"]
+            .into_iter()
+            .map(|id| Table {
+                stable_id: id.into(),
+                id: ObjectId::new("main", id),
+                ..Table::default()
+            })
+            .collect(),
+        ..Catalog::default()
+    };
+    let mut layout = Diagram::default();
+    layout.reconcile(&catalog.tables);
+    let mut history = LayoutHistory::default();
+    for members in [vec!["a".into(), "b".into()], vec!["b".into(), "c".into()]] {
+        assert!(
+            GroupDraft {
+                name: "Groupe".into(),
+                members,
+                ..Default::default()
+            }
+            .save(&catalog, &mut layout, &mut history)
+        );
+    }
+    let before = layout.clone();
+    history.record(&layout);
+    move_group(&catalog, &mut layout, 1, Point { x: 200.0, y: 30.0 });
+    assert_ne!(layout.groups[0], before.groups[0]);
+    assert_ne!(layout.groups[1], before.groups[1]);
+    let moved = layout.clone();
+    assert!(history.undo(&mut layout));
+    assert_eq!(layout, before);
+    assert!(history.redo(&mut layout));
+    assert_eq!(layout, moved);
+    move_tables(
+        &catalog,
+        &mut layout,
+        &["c".into()],
+        Point { x: 900.0, y: 0.0 },
+    );
+    let frame = &layout.groups[1];
+    assert!(frame.origin.x + frame.size.x > layout.positions["c"].x);
+}

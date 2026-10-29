@@ -27,6 +27,31 @@ fn catalog() -> Catalog {
 }
 
 #[test]
+fn spacious_profile_increases_spacing_without_moving_fixed_tables() {
+    let mut diagram = Diagram::default();
+    diagram
+        .positions
+        .insert("0".into(), Point { x: 72.0, y: 81.0 });
+    let mut input = LayoutInput::new(&catalog(), &diagram);
+    input.fixed.insert("0".into());
+    let compact = arrange_diagram_with_profile(&input, LayoutProfile::Compact);
+    let spacious = arrange_diagram_with_profile(&input, LayoutProfile::Spacious);
+    assert_eq!(compact.rects["0"].origin, diagram.positions["0"]);
+    assert_eq!(spacious.rects["0"].origin, diagram.positions["0"]);
+    assert_ne!(compact.rects, spacious.rects);
+    assert_eq!(
+        spacious,
+        arrange_diagram_with_profile(&input, LayoutProfile::Spacious)
+    );
+    let rects: Vec<_> = spacious.rects.values().collect();
+    for (i, a) in rects.iter().enumerate() {
+        for b in &rects[i + 1..] {
+            assert!(!a.intersects(b));
+        }
+    }
+}
+
+#[test]
 fn compact_layout_is_deterministic_and_ports_are_separate() {
     let input = LayoutInput::new(&catalog(), &Diagram::default());
     let result = arrange_diagram(&input);

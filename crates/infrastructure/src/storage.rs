@@ -7,6 +7,27 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagramTheme {
+    #[default]
+    Modern,
+    Midnight,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LegendStyle {
+    #[default]
+    Compact,
+    Detailed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub diagram_theme: DiagramTheme,
+    pub legend_style: LegendStyle,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
@@ -17,6 +38,7 @@ pub struct Preferences {
     pub schema_refresh_secs: f32,
     pub sql_limit: usize,
     pub layout: Option<serde_json::Value>,
+    pub appearance: Appearance,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -28,6 +50,7 @@ impl Default for Preferences {
             schema_refresh_secs: 5.0,
             sql_limit: 10000,
             layout: None,
+            appearance: Appearance::default(),
         }
     }
 }

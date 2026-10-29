@@ -149,4 +149,17 @@ fn mcd_renders_keys_constraints_and_relations_without_mutating_catalog() {
     harness.run();
     assert!(harness.query_by_label("Cadrer").is_some());
     harness.snapshot("mcd");
+    harness.get_by_label("Thème MCD").click();
+    harness.run();
+    harness.get_by_label("Bleu nuit").click();
+    harness.run();
+    harness.snapshot("mcd_midnight");
+    harness.get_by_label("Légende").click();
+    harness.run();
+    harness.get_by_label("Détaillée").click();
+    harness.run();
+    harness.get_by_label("Légende").click();
+    harness.run();
+    assert!(harness.query_by_label("Clé primaire").is_some());
+    harness.snapshot("legend_detailed");
 }
