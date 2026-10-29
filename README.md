@@ -26,7 +26,10 @@ Le paquet portable se construit avec `./scripts/Build-Release.ps1`. L’exécuta
 - Tableur paginé : tri multiple avec Maj+clic, filtres combinables, ajout et suppression de lignes, édition par double-clic sur une cellule.
 - **Appliquer** enregistre le lot dans une transaction ; **Annuler les modifications** abandonne le brouillon. Les conflits externes empêchent l’écrasement silencieux des données.
 - Éditeur SQL à sessions indépendantes : scripts, sélection, Ctrl+Entrée, insertion des objets connus, résultats multiples et annulation côté moteur.
-- MCD : tables déplaçables, zoom, tracés ajustables, cardinalités, groupes nommés et fenêtres natives partageant la disposition.
+- MCD : disposition automatique compacte, liens orthogonaux avec arrivées séparées et ponts aux croisements, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
+- Groupes : panneau dédié, sélection rectangulaire de tables, création/modification en brouillon, couleurs et fenêtres natives partageant la disposition.
+- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD et badges vectoriels PK/FK/UQ séparés.
+- Onglets avec fermeture intégrée et indicateur de brouillon ; catalogue des raccourcis et gestes souris dans **Paramètres → Raccourcis clavier** (**F1**).
 - Panneaux déplaçables par leur onglet et redimensionnables. Disposition et groupes enregistrés localement.
 
 **Le MCD ne modifie jamais la base.** La création/modification des tables, colonnes et contraintes passe par l’éditeur SQL.
@@ -44,7 +47,7 @@ Les préférences sont enregistrées dans le dossier de configuration utilisateu
 ```powershell
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo test --workspace --locked -j 1
 ./scripts/Test-Postgres.ps1                       # cluster jetable PostgreSQL 18 local
 ./scripts/Test-PgMatrix.ps1                       # archives officielles 16 et 17, clusters jetables
 ./scripts/Test-Postgres.ps1 -Tls -Port 55438        # certificats éphémères ; PowerShell 7.2+
@@ -52,7 +55,7 @@ cargo test --release -p kortex-supervisor -p kortex-infrastructure --test perfor
 cargo audit
 ```
 
-Les tests PostgreSQL et de performance sont explicitement ignorés dans la suite rapide ; les commandes dédiées et la CI les exécutent séparément. Aucun test ne se connecte à une base métier. Les captures de référence se trouvent dans `crates/desktop/tests/snapshots`. Leur mise à jour doit être revue visuellement : `$env:UPDATE_SNAPSHOTS='1'; cargo test -p kortex-supervisor --test ui`.
+Les tests PostgreSQL et de performance sont explicitement ignorés dans la suite rapide ; les commandes dédiées et la CI les exécutent séparément. `-j 1` limite la mémoire nécessaire au linker Windows. Aucun test ne se connecte à une base métier. Les captures de référence se trouvent dans `crates/desktop/tests/snapshots`. Leur mise à jour doit être revue visuellement : `$env:UPDATE_SNAPSHOTS='1'; cargo test -p kortex-supervisor --lib --test ui --test diagram_interactions -j 1`.
 
 Une base de démonstration peut être créée dans un **nouveau** fichier :
 

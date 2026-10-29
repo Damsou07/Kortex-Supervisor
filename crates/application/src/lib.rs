@@ -1,4 +1,5 @@
 //! Application ports and state machines independent of GUI and database drivers.
+pub mod diagram;
 use kortex_domain::*;
 use std::{
     collections::{BTreeMap, BTreeSet},

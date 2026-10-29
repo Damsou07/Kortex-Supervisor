@@ -33,6 +33,8 @@ fn mcd_200_tables_500_relations() {
     diagram.reconcile(&catalog.tables);
     let mut history = LayoutHistory::default();
     let mut initialized = false;
+    let mut view = mcd::DiagramView::default();
+    view.prepare_geometry(&catalog, &diagram);
     let mut harness = Harness::builder()
         .with_size([1400.0, 900.0])
         .build_ui_state(
@@ -43,7 +45,7 @@ fn mcd_200_tables_500_relations() {
                 }
                 mcd::show(ui, &catalog, &mut diagram, &mut history, view, None);
             },
-            mcd::DiagramView::default(),
+            view,
         );
     harness.run();
     let mut times = vec![];

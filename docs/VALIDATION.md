@@ -4,7 +4,7 @@
 
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
-3. `cargo test --workspace --locked` : règles pures, états applicatifs, transactions/conflits SQLite, sauvegarde atomique et captures UI.
+3. `cargo test --workspace --locked -j 1` : règles pures, états applicatifs, transactions/conflits SQLite, sauvegarde atomique et captures UI. La compilation séquentielle évite les pics de mémoire du linker Windows.
 4. `scripts/Test-Postgres.ps1` : création puis arrêt/nettoyage d’un cluster jetable. La variable `KORTEX_TEST_PG_PORT` est exigée par le test ignoré de la suite rapide.
 5. `scripts/Test-PgMatrix.ps1` : même test sur les binaires officiels PostgreSQL 16 et 17, conservés uniquement dans `.test-data/tools`.
    `scripts/Test-Postgres.ps1 -Tls -Port 55438` vérifie TLS avec une CA générée pour ce test uniquement, sans installation dans le magasin Windows (PowerShell 7.2+).
@@ -13,7 +13,7 @@
 
 Les tests couvrent la conservation des brouillons pendant un refresh, les résultats périmés, les filtres malveillants, les clés composites/nullable, les scripts à plusieurs instructions, les conflits externes, l’annulation PostgreSQL et la préservation du catalogue par le MCD. Les captures UI doivent être relues avant de mettre à jour les références.
 
-## Exécution locale du 29 octobre 2026
+## État initial du 29 octobre 2026, avant la refonte UX
 
 - Rust 1.99.1, Windows 11 x64 (10.0.26200), Build Tools Visual Studio stables 18.11.2, MSVC 14.51.36231.
 - `cargo fmt` et Clippy avec `-D warnings` : réussis.
@@ -26,6 +26,17 @@ Les tests couvrent la conservation des brouillons pendant un refresh, les résul
 - TLS réellement vérifié sur PostgreSQL 18 avec une PKI éphémère : connexion réussie avec CA personnalisée et nom `localhost`, refus du nom `127.0.0.1` absent du certificat, refus du certificat sans sa CA. Les tests rapides contrôlent aussi le refus du texte clair distant et d’un fichier CA vide. Aucun certificat de test n’a été installé dans Windows.
 
 La CI est fournie mais n’a pas été exécutée sur GitHub pendant cette livraison.
+
+## Validation de la refonte UX du 29 octobre 2026
+
+- Suite rapide : **46 tests réussis**, quatre tests dédiés ignorés. La suite couvre le placement déterministe, l’absence de chevauchements, les cycles et autoréférences, les relations parallèles, les ports distincts, les groupes partageant des tables, les ponts aux intersections et la conservation des retouches extérieures à une réorganisation partielle.
+- Tests d’interaction : rectangle traversant une relation, sélection additive avec Maj, création/annulation de groupe, texte présent aux zooms 12/25/27/100/250 %, loupe avec type complet, respect du focus des champs, tri protégé pendant un brouillon, raccourcis de navigation/fermeture et confirmation de perte de brouillon.
+- Le cache rejette une réponse de réorganisation devenue périmée après un déplacement. Une entrée inchangée conserve sa géométrie. La sauvegarde atomique et la lecture du format existant restent couvertes.
+- Six captures de référence relues : espace de travail, MCD, groupes, tableur, raccourcis et onglets avec titre long et indicateur de brouillon distinct.
+- Performances finales en release : **20,96 ms au p95** sur 120 frames CPU du MCD avec 200 tables/500 relations (budget : 33 ms), géométrie calculée avant la mesure et réutilisée pendant le panoramique. Page SQLite de 200 lignes après la clé 900000 sur un million de lignes : **0,30 ms**. Ces mesures n’incluent pas la présentation GPU ni une latence réseau PostgreSQL.
+- PostgreSQL **18**, cluster jetable local : test de contrat réussi, serveur arrêté et dossier supprimé. Le premier essai dans le sandbox échouait dès la connexion ; la relance hors du sandbox réussit sans changement du code des adaptateurs SQL.
+- Paquet portable contrôlé nativement avec la base de démonstration et des préférences isolées : affichage du MCD, sélection Ctrl+A, ouverture/fermeture d’une fenêtre détachée, zoom indépendant à 53 %, loupe lisible et sélection rectangulaire d’une table dans le brouillon de groupe. Le lancement dans le sandbox produisait `foreground window did not report a process id` ; le contrôle a pu être effectué hors du sandbox. Le changement de moniteur et les autres facteurs DPI restent à vérifier ; les tests egui ne remplacent pas ces contrôles.
+- Un premier lancement de la suite parallèle a dépassé la mémoire du linker (`LNK1102`) ; la suite et la CI Windows utilisent désormais `-j 1`. Les tests de stockage utilisent ici `TEMP`/`TMP` dirigés vers `target` pour éviter un refus d’accès au dossier temporaire du sandbox. Les avertissements de copie du cache incrémental ne sont pas des avertissements Clippy du code.
 
 ## Limites explicites du MVP
 

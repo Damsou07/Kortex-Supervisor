@@ -1,8 +1,22 @@
 //! A pure presentation surface: it can only edit local layout and request navigation.
-use crate::theme;
+mod groups;
+use crate::{
+    columns,
+    diagram_cache::DiagramCache,
+    shortcuts::{self, Command},
+    theme,
+};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use kortex_application::diagram::{GroupDraft, remove_group};
 use kortex_domain::*;
 use std::collections::BTreeSet;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum InteractionMode {
+    #[default]
+    Pan,
+    Select,
+}
 
 pub struct DiagramView {
     pub zoom: f32,
@@ -11,8 +25,18 @@ pub struct DiagramView {
     pub selected_route: Option<String>,
     pub fit: bool,
     pub search: String,
-    pub group_name: String,
-    pub group_color: [u8; 4],
+    pub mode: InteractionMode,
+    pub canvas: Rect,
+    pub groups_open: bool,
+    pub group_draft: Option<GroupDraft>,
+    group_search: String,
+    member_search: String,
+    selection_start: Option<Pos2>,
+    selection_base: BTreeSet<String>,
+    cache: DiagramCache,
+    sizes: std::collections::BTreeMap<String, Point>,
+    scope: Option<BTreeSet<String>>,
+    group_previous_mode: Option<InteractionMode>,
 }
 impl Default for DiagramView {
     fn default() -> Self {
@@ -23,9 +47,53 @@ impl Default for DiagramView {
             selected_route: None,
             fit: true,
             search: String::new(),
-            group_name: "Nouveau domaine".into(),
-            group_color: [110, 80, 25, 45],
+            mode: InteractionMode::Pan,
+            canvas: Rect::NOTHING,
+            groups_open: false,
+            group_draft: None,
+            group_search: String::new(),
+            member_search: String::new(),
+            selection_start: None,
+            selection_base: BTreeSet::new(),
+            cache: DiagramCache::default(),
+            sizes: Default::default(),
+            scope: None,
+            group_previous_mode: None,
         }
+    }
+}
+impl DiagramView {
+    pub fn prepare_geometry(&mut self, catalog: &Catalog, layout: &Diagram) {
+        self.cache.prepare(catalog, layout);
+    }
+    fn new_group(&mut self) {
+        self.group_previous_mode.get_or_insert(self.mode);
+        if let Some(scope) = &self.scope {
+            self.selected.retain(|id| scope.contains(id));
+        }
+        self.groups_open = true;
+        self.mode = InteractionMode::Select;
+        self.selected_route = None;
+        self.group_draft = Some(GroupDraft {
+            name: "Nouveau groupe".into(),
+            members: self.selected.iter().cloned().collect(),
+            color: [110, 120, 200, 40],
+            ..GroupDraft::default()
+        });
+    }
+    fn sync_members(&mut self) {
+        if let Some(draft) = &mut self.group_draft {
+            draft
+                .members
+                .retain(|id| self.scope.as_ref().is_some_and(|s| !s.contains(id)));
+            draft.members.extend(self.selected.iter().cloned());
+            draft.members.sort();
+            draft.members.dedup();
+        }
+    }
+    fn finish_group(&mut self) {
+        self.group_draft = None;
+        self.mode = self.group_previous_mode.take().unwrap_or_default();
     }
 }
 #[derive(Default)]
@@ -34,9 +102,12 @@ pub struct DiagramAction {
     pub detach: Option<(String, Vec<String>)>,
     pub inspect: Option<String>,
 }
-const WIDTH: f32 = 280.0;
-fn height(table: &Table) -> f32 {
-    42.0 + table.columns.len() as f32 * 24.0 + 25.0
+const WIDTH: f32 = TABLE_WIDTH;
+fn height(table: &Table, view: &DiagramView) -> f32 {
+    view.sizes
+        .get(&table.stable_id)
+        .map(|s| s.y)
+        .unwrap_or(67.0 + table.columns.len() as f32 * ROW_HEIGHT)
 }
 fn world_to_screen(p: Point, origin: Pos2, view: &DiagramView) -> Pos2 {
     origin + view.pan + egui::vec2(p.x, p.y) * view.zoom
@@ -57,7 +128,7 @@ fn table_rect(table: &Table, layout: &Diagram, origin: Pos2, view: &DiagramView)
         .unwrap_or_default();
     Rect::from_min_size(
         world_to_screen(p, origin, view),
-        egui::vec2(WIDTH, height(table)) * view.zoom,
+        egui::vec2(WIDTH, height(table, view)) * view.zoom,
     )
 }
 pub fn show(
@@ -69,6 +140,20 @@ pub fn show(
     subset: Option<&[String]>,
 ) -> DiagramAction {
     let mut action = DiagramAction::default();
+    view.scope = subset.map(|s| s.iter().cloned().collect());
+    view.selected
+        .retain(|id| catalog.tables.iter().any(|t| &t.stable_id == id));
+    let dragging = ui.input(|i| i.pointer.any_down());
+    if view.cache.update(catalog, layout, history, dragging) {
+        view.fit = true;
+        view.selected.clear();
+        view.selected_route = None;
+    }
+    view.sizes = LayoutInput::new(catalog, layout)
+        .nodes
+        .into_iter()
+        .map(|n| (n.id, n.rect.size))
+        .collect();
     let visible: Vec<_> = catalog
         .tables
         .iter()
@@ -100,13 +185,18 @@ pub fn show(
         {
             history.redo(layout);
         }
-        if ui.button("Réorganiser").clicked() {
-            history.record(layout);
-            for t in &visible {
-                layout.positions.remove(&t.stable_id);
-            }
-            layout.reconcile(&catalog.tables);
-            view.fit = true;
+        if ui
+            .add_enabled(
+                !view.cache.busy() && view.group_draft.is_none(),
+                egui::Button::new("Disposition par défaut"),
+            )
+            .on_hover_text("Replacer les tables et les groupes ; annulation possible")
+            .clicked()
+        {
+            view.cache.arrange = Some(subset.map(|s| s.to_vec()));
+        }
+        if view.cache.busy() {
+            ui.spinner();
         }
         if ui
             .add_enabled(
@@ -138,89 +228,72 @@ pub fn show(
             view.fit = true;
             action.inspect = Some(t.stable_id.clone());
         }
-        ui.separator();
-        ui.add(
-            egui::TextEdit::singleline(&mut view.group_name)
-                .desired_width(130.0)
-                .hint_text("Nom du groupe"),
-        );
-        ui.color_edit_button_srgba_unmultiplied(&mut view.group_color);
         if ui
-            .add_enabled(
-                !view.selected.is_empty(),
-                egui::Button::new("Encadrer la sélection"),
-            )
+            .selectable_label(view.mode == InteractionMode::Pan, "Déplacement")
+            .on_hover_text("H · glisser le fond pour déplacer la vue")
             .clicked()
         {
-            history.record(layout);
-            let members: Vec<_> = view.selected.iter().cloned().collect();
-            let bounds = bounds(catalog, layout, Some(&members));
-            let id = layout.groups.iter().map(|g| g.id).max().unwrap_or(0) + 1;
-            layout.groups.push(Group {
-                id,
-                name: view.group_name.clone(),
-                origin: Point {
-                    x: bounds.min.x - 25.0,
-                    y: bounds.min.y - 50.0,
-                },
-                size: Point {
-                    x: bounds.width() + 50.0,
-                    y: bounds.height() + 75.0,
-                },
-                members,
-                color: view.group_color,
-            });
+            view.mode = InteractionMode::Pan;
         }
-        ui.menu_button("Groupes", |ui| {
-            let mut remove = None;
-            for i in 0..layout.groups.len() {
-                let before = layout.clone();
-                let mut changed = false;
-                ui.push_id(i, |ui| {
-                    let group = &mut layout.groups[i];
-                    changed |= ui.text_edit_singleline(&mut group.name).changed();
-                    changed |= ui
-                        .color_edit_button_srgba_unmultiplied(&mut group.color)
-                        .changed();
-                    ui.horizontal(|ui| {
-                        if ui.button("↗ Fenêtre").clicked() {
-                            action.detach = Some((group.name.clone(), group.members.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Sélectionner").clicked() {
-                            view.selected = group.members.iter().cloned().collect();
-                            view.fit = true;
-                            ui.close();
-                        }
-                        if ui
-                            .button("Remplacer les membres")
-                            .on_hover_text("Utiliser les tables actuellement sélectionnées")
-                            .clicked()
-                        {
-                            group.members = view.selected.iter().cloned().collect();
-                            changed = true;
-                        }
-                        if ui.button("Supprimer le cadre").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                });
-                if changed {
-                    history.record(&before);
-                }
-            }
-            if let Some(i) = remove {
-                history.record(layout);
-                layout.groups.remove(i);
-            }
-        });
+        if ui
+            .selectable_label(view.mode == InteractionMode::Select, "Sélection")
+            .on_hover_text("V · tracer un rectangle autour des tables")
+            .clicked()
+        {
+            view.mode = InteractionMode::Select;
+            view.selected_route = None;
+        }
+        if ui.selectable_label(view.groups_open, "Groupes").clicked() {
+            view.groups_open = !view.groups_open;
+        }
+        columns::legend(ui);
     });
+    if view.groups_open {
+        groups::show(ui, catalog, layout, history, view, &mut action, subset);
+    }
     ui.label(egui::RichText::new("Glisser : déplacer · Maj+clic : sélection multiple · Molette : zoom · Fond : déplacer la vue · Double-clic sur un lien : point de passage").small().color(theme::MUTED));
     let (canvas, background) = ui.allocate_exact_size(
         ui.available_size().max(egui::vec2(100.0, 100.0)),
         Sense::click_and_drag(),
     );
+    view.canvas = canvas;
+    background.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, "Zone du MCD"));
+    if background.clicked() || background.drag_started() {
+        background.request_focus();
+    }
+    if background.has_focus() {
+        if shortcuts::consume(ui.ctx(), Command::SelectAll) {
+            view.selected = visible.iter().map(|t| t.stable_id.clone()).collect();
+            view.selected_route = None;
+            view.sync_members();
+        }
+        if shortcuts::consume(ui.ctx(), Command::Undo) {
+            history.undo(layout);
+        }
+        if shortcuts::consume(ui.ctx(), Command::Redo) {
+            history.redo(layout);
+        }
+        if shortcuts::consume(ui.ctx(), Command::Fit) {
+            view.fit = true;
+        }
+        if shortcuts::consume(ui.ctx(), Command::Select) {
+            view.mode = InteractionMode::Select;
+            view.selected_route = None;
+        }
+        if shortcuts::consume(ui.ctx(), Command::Pan) {
+            view.mode = InteractionMode::Pan;
+        }
+        if shortcuts::consume(ui.ctx(), Command::Group) {
+            view.new_group();
+        }
+        if shortcuts::consume(ui.ctx(), Command::Cancel) {
+            view.selection_start = None;
+            view.finish_group();
+            view.selected_route = None;
+        }
+    }
     let painter = ui.painter().with_clip_rect(canvas);
+    let mut arrowheads = Vec::new();
     painter.rect_filled(canvas, 0.0, Color32::from_rgb(11, 13, 17));
     if view.fit {
         let ids: Vec<_> = view.selected.iter().cloned().collect();
@@ -237,13 +310,42 @@ pub fn show(
         view.fit = false;
     }
     if background.dragged_by(egui::PointerButton::Middle)
-        || background.dragged_by(egui::PointerButton::Primary)
+        || (view.mode == InteractionMode::Pan
+            && background.dragged_by(egui::PointerButton::Primary))
     {
         view.pan += ui.input(|i| i.pointer.delta());
     }
     if background.clicked() && !ui.input(|i| i.modifiers.shift) {
         view.selected.clear();
         view.selected_route = None;
+        view.sync_members();
+    }
+    if view.mode == InteractionMode::Select {
+        if background.drag_started_by(egui::PointerButton::Primary) {
+            view.selection_start = ui.input(|i| i.pointer.press_origin());
+            view.selection_base = if ui.input(|i| i.modifiers.shift) {
+                view.selected.clone()
+            } else {
+                BTreeSet::new()
+            };
+            view.selected_route = None;
+        }
+        if let Some(start) = view.selection_start
+            && let Some(end) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let selection = Rect::from_two_pos(start, end);
+            view.selected = view.selection_base.clone();
+            let hit: Vec<_> = visible
+                .iter()
+                .filter(|t| table_rect(t, layout, canvas.min, view).intersects(selection))
+                .map(|t| t.stable_id.clone())
+                .collect();
+            view.selected.extend(hit);
+            view.sync_members();
+        }
+        if background.drag_stopped() {
+            view.selection_start = None;
+        }
     }
     if background.hovered()
         || canvas.contains(ui.input(|i| i.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
@@ -307,7 +409,12 @@ pub fn show(
         painter.text(
             rect.min + egui::vec2(12.0, 14.0) * view.zoom,
             Align2::LEFT_TOP,
-            &group.name,
+            columns::ellipsize(
+                &painter,
+                &group.name,
+                &FontId::proportional(16.0 * view.zoom),
+                (rect.width() - 24.0 * view.zoom).max(0.0),
+            ),
             FontId::proportional(16.0 * view.zoom),
             theme::YELLOW,
         );
@@ -315,7 +422,11 @@ pub fn show(
         let response = ui.interact(
             header,
             egui::Id::unique(("group", group.id)),
-            Sense::click_and_drag(),
+            if view.mode == InteractionMode::Pan {
+                Sense::click_and_drag()
+            } else {
+                Sense::hover()
+            },
         );
         if response.drag_started() {
             history.record(layout);
@@ -334,7 +445,11 @@ pub fn show(
         let response = ui.interact(
             handle,
             egui::Id::unique(("group_size", group.id)),
-            Sense::drag(),
+            if view.mode == InteractionMode::Pan {
+                Sense::drag()
+            } else {
+                Sense::hover()
+            },
         );
         if response.drag_started() {
             history.record(layout);
@@ -353,9 +468,28 @@ pub fn show(
                 continue;
             };
             let external = subset.is_some_and(|s| !s.contains(&target.stable_id));
-            let route = layout.routes.get(&fk.id).cloned().unwrap_or_default();
             let src_rect = table_rect(source, layout, canvas.min, view);
             let dst_rect = table_rect(target, layout, canvas.min, view);
+            let route = layout.routes.get(&fk.id).cloned().unwrap_or_else(|| {
+                let Some(edge) = view.cache.geometry.edges.get(&fk.id) else {
+                    return Route::default();
+                };
+                let (Some(a), Some(b), Some(src), Some(dst)) = (
+                    edge.points.first(),
+                    edge.points.last(),
+                    view.cache.geometry.rects.get(&source.stable_id),
+                    view.cache.geometry.rects.get(&target.stable_id),
+                ) else {
+                    return Route::default();
+                };
+                Route {
+                    source_left: a.x < src.origin.x + src.size.x / 2.0,
+                    target_right: b.x > dst.origin.x + dst.size.x / 2.0,
+                    source_y: Some(a.y - src.origin.y),
+                    target_y: Some(b.y - dst.origin.y),
+                    ..Route::default()
+                }
+            });
             let src_row = fk
                 .columns
                 .first()
@@ -376,7 +510,7 @@ pub fn show(
                     + route
                         .source_y
                         .unwrap_or(48.0 + src_row as f32 * 24.0)
-                        .clamp(0.0, height(source))
+                        .clamp(0.0, height(source, view))
                         * view.zoom,
             );
             let end = if external {
@@ -392,35 +526,64 @@ pub fn show(
                         + route
                             .target_y
                             .unwrap_or(48.0 + dst_row as f32 * 24.0)
-                            .clamp(0.0, height(target))
+                            .clamp(0.0, height(target, view))
                             * view.zoom,
                 )
             };
-            let mut points = vec![start];
-            if !route.points.is_empty() {
-                points.extend(
+            let mut points = if !route.points.is_empty() {
+                let mut p = vec![start];
+                p.extend(
                     route
                         .points
                         .iter()
                         .map(|p| world_to_screen(*p, canvas.min, view)),
                 );
-            } else if source.id == target.id {
-                points.extend([
-                    start + egui::vec2(50.0, 0.0) * view.zoom,
-                    egui::pos2(
-                        start.x + 50.0 * view.zoom,
-                        src_rect.top() - 30.0 * view.zoom,
-                    ),
-                    egui::pos2(end.x - 40.0 * view.zoom, src_rect.top() - 30.0 * view.zoom),
-                    end - egui::vec2(40.0, 0.0) * view.zoom,
-                ]);
+                p.push(end);
+                p
+            } else if let Some(edge) = view.cache.geometry.edges.get(&fk.id) {
+                let mut p: Vec<_> = edge
+                    .points
+                    .iter()
+                    .map(|p| world_to_screen(*p, canvas.min, view))
+                    .collect();
+                // Keep endpoints attached while a fresh routing job is pending.
+                if let (Some(a), Some(b)) = (p.first().copied(), p.last().copied()) {
+                    let source_size = view.cache.geometry.rects.get(&source.stable_id);
+                    let target_size = view.cache.geometry.rects.get(&target.stable_id);
+                    let shift = |r: Option<&NodeRect>, t: &Table| {
+                        r.and_then(|r| {
+                            layout
+                                .positions
+                                .get(&t.stable_id)
+                                .map(|p| egui::vec2(p.x - r.origin.x, p.y - r.origin.y) * view.zoom)
+                        })
+                        .unwrap_or_default()
+                    };
+                    let da = shift(source_size, source);
+                    let db = shift(target_size, target);
+                    p[0] = a + da;
+                    let last = p.len() - 1;
+                    p[last] = b + db;
+                }
+                p
             } else {
                 let mid = (start.x + end.x) / 2.0;
-                points.extend([egui::pos2(mid, start.y), egui::pos2(mid, end.y)]);
+                vec![start, egui::pos2(mid, start.y), egui::pos2(mid, end.y), end]
+            };
+            if external {
+                points = vec![start, end];
             }
-            points.push(end);
+            let start = points.first().copied().unwrap_or(start);
+            let end = points.last().copied().unwrap_or(end);
             let selected = view.selected_route.as_deref() == Some(&fk.id);
-            let color = if selected {
+            let hovered = view.mode == InteractionMode::Pan
+                && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| {
+                    canvas.contains(p)
+                        && points
+                            .windows(2)
+                            .any(|s| distance_to_segment(p, s[0], s[1]) < 5.0)
+                });
+            let color = if selected || hovered {
                 theme::YELLOW
             } else {
                 Color32::from_rgb(205, 66, 69)
@@ -437,7 +600,11 @@ pub fn show(
                 let response = ui.interact(
                     bounds,
                     egui::Id::unique(("edge", &fk.id, segment)),
-                    Sense::click(),
+                    if hovered && view.mode == InteractionMode::Pan {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    },
                 );
                 if response.clicked() {
                     view.selected_route = Some(fk.id.clone());
@@ -447,7 +614,10 @@ pub fn show(
                 {
                     history.record(layout);
                     let p = screen_to_world(pos, canvas.min, view);
-                    let route = layout.routes.entry(fk.id.clone()).or_default();
+                    let route = layout
+                        .routes
+                        .entry(fk.id.clone())
+                        .or_insert_with(|| route.clone());
                     if route.points.is_empty() {
                         route.points = points[1..points.len() - 1]
                             .iter()
@@ -458,39 +628,85 @@ pub fn show(
                     view.selected_route = Some(fk.id.clone());
                 }
                 response.on_hover_text(format!(
-                    "{} : {} → {}\nUPDATE {} · DELETE {}",
+                    "{} : {} ({}) → {} ({})\nUPDATE {} · DELETE {}",
                     fk.name,
+                    source.id.label(),
                     fk.columns.join(", "),
                     fk.target.label(),
+                    fk.target_columns.join(", "),
                     fk.on_update,
                     fk.on_delete
                 ));
             }
-            let direction = (end - points[points.len() - 2]).normalized();
-            let normal = egui::vec2(-direction.y, direction.x);
-            painter.line_segment(
-                [end, end - direction * 9.0 + normal * 4.0],
-                Stroke::new(1.5, color),
-            );
-            painter.line_segment(
-                [end, end - direction * 9.0 - normal * 4.0],
-                Stroke::new(1.5, color),
-            );
+            if let Some(edge) = view.cache.geometry.edges.get(&fk.id) {
+                for p in &edge.bridges {
+                    let center = world_to_screen(*p, canvas.min, view);
+                    if !points
+                        .windows(2)
+                        .any(|s| distance_to_segment(center, s[0], s[1]) < 0.1)
+                    {
+                        continue;
+                    }
+                    let radius = (4.0 * view.zoom).clamp(0.8, 4.0);
+                    let horizontal = points.windows(2).any(|s| {
+                        s[0].y == s[1].y
+                            && (center.y - s[0].y).abs() < 0.1
+                            && center.x > s[0].x.min(s[1].x)
+                            && center.x < s[0].x.max(s[1].x)
+                    });
+                    painter.circle_filled(center, radius + 1.0, Color32::from_rgb(11, 13, 17));
+                    let arc = (0..=8)
+                        .map(|i| {
+                            let a = std::f32::consts::PI * i as f32 / 8.0;
+                            center
+                                + if horizontal {
+                                    egui::vec2(a.cos(), -a.sin()) * radius
+                                } else {
+                                    egui::vec2(a.sin(), a.cos()) * radius
+                                }
+                        })
+                        .collect();
+                    painter.add(egui::Shape::line(arc, Stroke::new(1.3, color)));
+                }
+            }
+            if points.len() > 1 {
+                let direction = (end - points[points.len() - 2]).normalized();
+                arrowheads.push((end, direction, color, (8.0 * view.zoom).clamp(0.8, 8.0)));
+            }
             let (reference, inverse) = cardinalities(source, fk);
             painter.text(
-                start + egui::vec2(if route.source_left { -5.0 } else { 5.0 }, -13.0),
-                if route.source_left {
-                    Align2::RIGHT_BOTTOM
+                start
+                    + egui::vec2(
+                        if start.x < src_rect.center().x {
+                            -5.0
+                        } else {
+                            5.0
+                        },
+                        5.0,
+                    ),
+                if start.x < src_rect.center().x {
+                    Align2::RIGHT_TOP
                 } else {
-                    Align2::LEFT_BOTTOM
+                    Align2::LEFT_TOP
                 },
                 inverse.label(),
                 FontId::monospace((12.0 * view.zoom).max(9.0)),
                 theme::YELLOW,
             );
             painter.text(
-                end + egui::vec2(-5.0, -13.0),
-                Align2::RIGHT_BOTTOM,
+                end + egui::vec2(
+                    if end.x > dst_rect.center().x {
+                        5.0
+                    } else {
+                        -5.0
+                    },
+                    -5.0,
+                ),
+                if end.x > dst_rect.center().x {
+                    Align2::LEFT_BOTTOM
+                } else {
+                    Align2::RIGHT_BOTTOM
+                },
                 if external {
                     format!("{} ↗ {}", reference.label(), target.id.name)
                 } else {
@@ -499,7 +715,7 @@ pub fn show(
                 FontId::monospace((12.0 * view.zoom).max(9.0)),
                 theme::YELLOW,
             );
-            if selected {
+            if selected && view.mode == InteractionMode::Pan {
                 for (i, p) in route.points.iter().enumerate() {
                     let screen = world_to_screen(*p, canvas.min, view);
                     painter.circle_filled(screen, 5.0, theme::YELLOW);
@@ -544,18 +760,21 @@ pub fn show(
                     if r.dragged()
                         && let Some(pointer) = r.interact_pointer_pos()
                     {
-                        let route = layout.routes.entry(fk.id.clone()).or_default();
+                        let route = layout
+                            .routes
+                            .entry(fk.id.clone())
+                            .or_insert_with(|| route.clone());
                         if is_source {
                             route.source_left = pointer.x < src_rect.center().x;
                             route.source_y = Some(
                                 ((pointer.y - src_rect.top()) / view.zoom)
-                                    .clamp(0.0, height(source)),
+                                    .clamp(0.0, height(source, view)),
                             );
                         } else {
                             route.target_right = pointer.x > dst_rect.center().x;
                             route.target_y = Some(
                                 ((pointer.y - dst_rect.top()) / view.zoom)
-                                    .clamp(0.0, height(target)),
+                                    .clamp(0.0, height(target, view)),
                             );
                         }
                     }
@@ -596,43 +815,30 @@ pub fn show(
         painter.text(
             header.min + egui::vec2(9.0, 10.0) * view.zoom,
             Align2::LEFT_TOP,
-            &table.id.name,
+            columns::ellipsize(
+                &painter,
+                &table.id.name,
+                &FontId::proportional(15.0 * view.zoom),
+                (header.width() - 18.0 * view.zoom).max(0.0),
+            ),
             FontId::proportional(15.0 * view.zoom),
             Color32::WHITE,
         );
         for (i, col) in table.columns.iter().enumerate() {
-            let p = rect.min + egui::vec2(9.0, 42.0 + i as f32 * 24.0) * view.zoom;
-            if view.zoom > 0.26 {
-                let label = format!("{}{}", theme::badges(table, col), col.name);
-                let split = rect.left() + rect.width() * 0.68;
-                painter
-                    .with_clip_rect(
-                        Rect::from_min_max(rect.min, egui::pos2(split, rect.bottom()))
-                            .intersect(canvas),
-                    )
-                    .text(
-                        p,
-                        Align2::LEFT_TOP,
-                        label,
-                        FontId::monospace(11.0 * view.zoom),
-                        if table.primary_key.contains(&col.name) {
-                            theme::YELLOW
-                        } else {
-                            Color32::from_gray(220)
-                        },
-                    );
-                painter
-                    .with_clip_rect(
-                        Rect::from_min_max(egui::pos2(split + 4.0, rect.top()), rect.max)
-                            .intersect(canvas),
-                    )
-                    .text(
-                        egui::pos2(rect.right() - 9.0 * view.zoom, p.y),
-                        Align2::RIGHT_TOP,
-                        &col.data_type,
-                        FontId::monospace(10.0 * view.zoom),
-                        theme::MUTED,
-                    );
+            let row = Rect::from_min_size(
+                rect.min + egui::vec2(0.0, 42.0 + i as f32 * ROW_HEIGHT) * view.zoom,
+                egui::vec2(rect.width(), ROW_HEIGHT * view.zoom),
+            );
+            if row.intersects(canvas) {
+                columns::paint_row(&painter, row, table, col, view.zoom);
+            }
+            if view.zoom >= 0.6 {
+                ui.interact(
+                    row,
+                    egui::Id::unique(("column", &table.stable_id, i)),
+                    Sense::hover(),
+                )
+                .on_hover_text(columns::tooltip(table, col));
             }
         }
         painter.text(
@@ -647,11 +853,20 @@ pub fn show(
             theme::MUTED,
         );
         let response = ui.interact(
-            header,
+            if view.mode == InteractionMode::Select {
+                rect
+            } else {
+                header
+            },
             egui::Id::unique(("table", &table.stable_id)),
-            Sense::click_and_drag(),
+            if view.mode == InteractionMode::Pan {
+                Sense::click_and_drag()
+            } else {
+                Sense::click()
+            },
         );
         if response.clicked() {
+            background.request_focus();
             if ui.input(|i| i.modifiers.shift) {
                 if !view.selected.insert(table.stable_id.clone()) {
                     view.selected.remove(&table.stable_id);
@@ -660,8 +875,10 @@ pub fn show(
                 view.selected = BTreeSet::from([table.stable_id.clone()]);
             }
             action.inspect = Some(table.stable_id.clone());
+            view.sync_members();
         }
         if response.drag_started() {
+            background.request_focus();
             history.record(layout);
             if !view.selected.contains(&table.stable_id) {
                 view.selected = BTreeSet::from([table.stable_id.clone()]);
@@ -681,11 +898,64 @@ pub fn show(
             table.id.label(),
             table.comment
         ));
+        if view.zoom < 0.6 && !ui.input(|i| i.pointer.any_down()) {
+            ui.interact(
+                rect,
+                egui::Id::unique(("table_loupe", &table.stable_id)),
+                Sense::hover(),
+            )
+            .on_hover_ui(|ui| columns::table_details(ui, table));
+        }
+    }
+    for (end, direction, color, size) in arrowheads {
+        let normal = egui::vec2(-direction.y, direction.x);
+        painter.line_segment(
+            [end, end - direction * size + normal * size * 0.45],
+            Stroke::new(1.3, color),
+        );
+        painter.line_segment(
+            [end, end - direction * size - normal * size * 0.45],
+            Stroke::new(1.3, color),
+        );
+    }
+    if let Some(start) = view.selection_start
+        && let Some(end) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let selection = Rect::from_two_pos(start, end).intersect(canvas);
+        painter.rect_filled(
+            selection,
+            0.0,
+            Color32::from_rgba_unmultiplied(100, 160, 255, 30),
+        );
+        painter.rect_stroke(
+            selection,
+            0.0,
+            Stroke::new(1.0, Color32::LIGHT_BLUE),
+            StrokeKind::Inside,
+        );
+    }
+    if view.cache.busy() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(16));
     }
     action
 }
+fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let d = b - a;
+    let t = if d.length_sq() > 0.0 {
+        ((p - a).dot(d) / d.length_sq()).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + d * t)
+}
 fn bounds(catalog: &Catalog, layout: &Diagram, subset: Option<&[String]>) -> Rect {
     let mut result = Rect::NOTHING;
+    let sizes: std::collections::BTreeMap<_, _> = LayoutInput::new(catalog, layout)
+        .nodes
+        .into_iter()
+        .map(|n| (n.id, n.rect.size))
+        .collect();
     for table in &catalog.tables {
         if subset.is_some_and(|s| !s.contains(&table.stable_id)) {
             continue;
@@ -693,7 +963,7 @@ fn bounds(catalog: &Catalog, layout: &Diagram, subset: Option<&[String]>) -> Rec
         if let Some(p) = layout.positions.get(&table.stable_id) {
             result = result.union(Rect::from_min_size(
                 egui::pos2(p.x, p.y),
-                egui::vec2(WIDTH, height(table)),
+                egui::vec2(WIDTH, sizes[&table.stable_id].y),
             ));
         }
     }

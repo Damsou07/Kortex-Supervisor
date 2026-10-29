@@ -10,6 +10,18 @@
 
 `kortex-supervisor` assure la présentation egui, les panneaux `egui_tiles` et les fenêtres natives. `mcd::show` reçoit seulement un catalogue et une disposition : aucune interface de mutation SQL ne lui est fournie. Il retourne des intentions de navigation, d’inspection et d’ouverture de fenêtre.
 
+## Géométrie et présentation du MCD
+
+`domain::geometry` définit `LayoutInput`, `LayoutResult`, les rectangles et chemins en coordonnées monde. Le placement utilise les composantes fortement connexes, des couches ordonnées par barycentre, la compaction et le rangement des composantes indépendantes. Les couches trop longues sont repliées pour éviter des diagrammes excessivement étendus. Les groupes qui partagent des tables forment un bloc de placement commun sans modifier leurs appartenances.
+
+Les tailles des cartes tiennent compte des colonnes et du nombre de ports. Les ports des relations automatiques sont séparés de 16 unités et restent proches des colonnes concernées lorsque l’espace le permet. Le routage orthogonal utilise une grille d’obstacles avec une marge de 12 unités ; son coût pénalise longueur, coudes, segments superposés et croisements. Les intersections restantes produisent des ponts visuels. Cette heuristique ne promet pas un optimum global ni un graphe sans croisements dans tous les cas.
+
+Le port applicatif `DiagramExecutor` échange des requêtes/réponses identifiées par révision. `DiagramWorker` fournit un worker CPU et une file bornée, séparés des workers SQL. Le cache de chaque vue ignore les résultats dont l’entrée a changé ; zoom et panoramique ne font pas partie de cette entrée. Le rendu reste disponible pendant les calculs. L’initialisation et l’ajout de tables calculent uniquement les positions ; le routage complet se fait dans le worker.
+
+Les opérations applicatives sur les groupes utilisent un `GroupDraft`. Valider un groupe, supprimer son cadre ou appliquer une réorganisation constitue une seule entrée d’historique. La présentation sépare le panneau des groupes, le cache géométrique, le dessin commun des colonnes et les onglets. Le registre des raccourcis alimente leur exécution et leur catalogue.
+
+Le format persistant `Diagram` reste inchangé : positions, groupes et retouches manuelles de `Route`. Les chemins automatiques et les états transitoires de sélection/brouillon ne sont pas sérialisés. La réconciliation conserve les positions existantes et place les nouvelles tables dans un espace libre. Aucun changement du catalogue ou des données n’est déclenché par ces fonctions.
+
 ## Concurrence et volumes
 
 Les files de commandes et de résultats sont bornées. Chaque requête possède un identifiant ; les vues de données n’acceptent que leur réponse attendue. Le rendu n’attend pas les requêtes. Les résultats SQL arrivent par blocs de 200 lignes ; les pages du tableur sont limitées à 200 lignes par défaut.

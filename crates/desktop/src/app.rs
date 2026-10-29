@@ -1,8 +1,10 @@
 use crate::{
+    columns,
     grid::{self, DataView},
     mcd::{self, DiagramView},
+    shortcuts::{self, Command},
     sql::{self, SqlView},
-    theme,
+    tabs, theme,
 };
 use egui::{RichText, Ui};
 use kortex_application::SecretStore;
@@ -42,8 +44,8 @@ struct Connection {
 }
 enum DocumentKind {
     Data(Box<DataView>),
-    Sql(SqlView),
-    Diagram(DiagramView),
+    Sql(Box<SqlView>),
+    Diagram(Box<DiagramView>),
 }
 struct Document {
     id: u64,
@@ -184,6 +186,9 @@ pub struct KortexApp {
     search: String,
     form: Option<ConnectionForm>,
     settings: bool,
+    settings_shortcuts: bool,
+    shortcut_search: String,
+    revealed_tab: Option<u64>,
     last_save: Instant,
     close_document: Option<u64>,
     close_app: bool,
@@ -249,6 +254,9 @@ impl KortexApp {
             search: String::new(),
             form: None,
             settings: false,
+            settings_shortcuts: false,
+            shortcut_search: String::new(),
+            revealed_tab: None,
             last_save: Instant::now(),
             close_document: None,
             close_app: false,
@@ -687,7 +695,7 @@ impl KortexApp {
                             id,
                             connection,
                             title: "MCD".into(),
-                            kind: DocumentKind::Diagram(DiagramView::default()),
+                            kind: DocumentKind::Diagram(Box::default()),
                         });
                         self.active = Some(id);
                     }
@@ -706,7 +714,7 @@ impl KortexApp {
                         id,
                         connection,
                         title: format!("SQL {id}"),
-                        kind: DocumentKind::Sql(view),
+                        kind: DocumentKind::Sql(Box::new(view)),
                     });
                     self.active = Some(id);
                 }
@@ -836,6 +844,31 @@ impl KortexApp {
     pub fn render(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.poll(&ctx);
+        if shortcuts::consume(&ctx, Command::Help) {
+            self.settings = true;
+            self.settings_shortcuts = true;
+        }
+        if shortcuts::consume(&ctx, Command::Close)
+            && let Some(id) = self.active
+        {
+            self.actions.push(Action::Close(id));
+        }
+        let previous = shortcuts::consume(&ctx, Command::Previous);
+        let next = shortcuts::consume(&ctx, Command::Next);
+        if (previous || next) && !self.documents.is_empty() {
+            let len = self.documents.len();
+            let current = self
+                .documents
+                .iter()
+                .position(|d| Some(d.id) == self.active)
+                .unwrap_or(0);
+            let index = if previous {
+                (current + len - 1) % len
+            } else {
+                (current + 1) % len
+            };
+            self.active = Some(self.documents[index].id);
+        }
         egui::Panel::top("top_bar").resizable(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some(logo) = &self.logo {
@@ -859,7 +892,7 @@ impl KortexApp {
                 if ui.button("Paramètres").clicked() {
                     self.settings = true;
                 }
-                if ui.button("Disposition initiale").clicked() {
+                if ui.button("Réinitialiser les panneaux").clicked() {
                     self.tree = Some(default_layout());
                 }
             });
@@ -1053,28 +1086,29 @@ impl KortexApp {
                             .get(&doc.connection)
                             .map(|c| c.profile.name.as_str())
                             .unwrap_or("?");
-                        if ui
-                            .selectable_label(
+                        ui.push_id(doc.id, |ui| {
+                            ui.set_max_width(220.0);
+                            let response = tabs::document_tab(
+                                ui,
+                                &doc.title,
+                                connection,
                                 self.active == Some(doc.id),
-                                format!("{}{}", doc.title, if dirty { " •" } else { "" }),
-                            )
-                            .on_hover_text(connection)
-                            .clicked()
-                        {
-                            self.active = Some(doc.id);
-                        }
-                        if ui
-                            .small_button("×")
-                            .on_hover_text("Fermer l’onglet")
-                            .clicked()
-                        {
-                            self.actions.push(Action::Close(doc.id));
-                        }
+                                dirty,
+                                self.active == Some(doc.id) && self.revealed_tab != self.active,
+                            );
+                            if response.activate {
+                                self.active = Some(doc.id);
+                            }
+                            if response.close {
+                                self.actions.push(Action::Close(doc.id));
+                            }
+                        });
                     }
                 });
             });
         });
         ui.separator();
+        self.revealed_tab = self.active;
         let Some(index) = self
             .documents
             .iter()
@@ -1189,25 +1223,23 @@ impl KortexApp {
                 ui.separator();
                 ui.label(theme::heading("COLONNES"));
                 for col in &table.columns {
-                    egui::CollapsingHeader::new(format!(
-                        "{}{}",
-                        theme::badges(table, col),
-                        col.name
-                    ))
-                    .show(ui, |ui| {
-                        ui.monospace(&col.data_type);
-                        ui.label(if col.nullable {
-                            "NULL autorisé"
-                        } else {
-                            "NOT NULL"
+                    columns::header(ui, table, col, false);
+                    egui::CollapsingHeader::new("Détails")
+                        .id_salt(&col.name)
+                        .show(ui, |ui| {
+                            ui.monospace(&col.data_type);
+                            ui.label(if col.nullable {
+                                "NULL autorisé"
+                            } else {
+                                "NOT NULL"
+                            });
+                            if let Some(default) = &col.default {
+                                ui.monospace(format!("DEFAULT {default}"));
+                            }
+                            if !col.comment.is_empty() {
+                                ui.label(&col.comment);
+                            }
                         });
-                        if let Some(default) = &col.default {
-                            ui.monospace(format!("DEFAULT {default}"));
-                        }
-                        if !col.comment.is_empty() {
-                            ui.label(&col.comment);
-                        }
-                    });
                 }
                 ui.separator();
                 ui.label(theme::heading("INDEX"));
@@ -1326,8 +1358,18 @@ impl KortexApp {
     }
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         egui::Window::new("Paramètres")
+            .default_size([580.0, 620.0])
             .open(&mut self.settings)
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.settings_shortcuts, false, "Général");
+                    ui.selectable_value(&mut self.settings_shortcuts, true, "Raccourcis clavier");
+                });
+                ui.separator();
+                if self.settings_shortcuts {
+                    shortcuts::catalogue(ui, &mut self.shortcut_search);
+                    return;
+                }
                 ui.label("Actualisation PostgreSQL");
                 ui.horizontal(|ui| {
                     ui.label("Données (secondes)");
@@ -1492,4 +1534,68 @@ fn default_layout() -> egui_tiles::Tree<Pane> {
     row.shares.set_share(inspector, 0.18);
     let root = tiles.insert_new(Tile::Container(Container::Linear(row)));
     egui_tiles::Tree::new(egui::Id::unique("workspace_layout"), root, tiles)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    #[test]
+    fn keyboard_navigation_and_close_keep_the_draft_confirmation() {
+        let mut app = KortexApp::for_test();
+        for id in 1..=2 {
+            let mut view = DataView::new(Table {
+                stable_id: id.to_string(),
+                id: ObjectId::new("main", &format!("table_{id}")),
+                columns: vec![Column::new("id", "integer", false)],
+                primary_key: vec!["id".into()],
+                ..Table::default()
+            });
+            if id == 1 {
+                view.grid.inserted.push(Default::default());
+            }
+            app.documents.push(Document {
+                id,
+                connection: "offline".into(),
+                title: format!("Table {id}"),
+                kind: DocumentKind::Data(Box::new(view)),
+            });
+        }
+        app.active = Some(1);
+        let mut initialized = false;
+        let mut harness = Harness::builder()
+            .with_size([1500.0, 900.0])
+            .build_ui_state(
+                move |ui, app: &mut KortexApp| {
+                    if !initialized {
+                        theme::apply(ui.ctx());
+                        initialized = true;
+                    }
+                    app.render(ui);
+                },
+                app,
+            );
+        harness.run();
+        harness.key_combination_modifiers(egui::Modifiers::CTRL, &[egui::Key::Tab]);
+        harness.run();
+        assert_eq!(harness.state().active, Some(2));
+        harness.key_combination_modifiers(
+            egui::Modifiers {
+                shift: true,
+                ..egui::Modifiers::CTRL
+            },
+            &[egui::Key::Tab],
+        );
+        harness.run();
+        assert_eq!(harness.state().active, Some(1));
+        harness.key_combination_modifiers(egui::Modifiers::CTRL, &[egui::Key::Tab]);
+        harness.run();
+        harness.key_combination_modifiers(egui::Modifiers::CTRL, &[egui::Key::W]);
+        harness.run();
+        assert_eq!(harness.state().documents.len(), 1);
+        harness.key_combination_modifiers(egui::Modifiers::CTRL, &[egui::Key::W]);
+        harness.run();
+        assert_eq!(harness.state().documents.len(), 1);
+        assert_eq!(harness.state().close_document, Some(1));
+    }
 }

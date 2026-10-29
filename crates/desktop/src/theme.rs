@@ -53,26 +53,3 @@ pub fn apply(ctx: &egui::Context) {
 pub fn heading(text: &str) -> RichText {
     RichText::new(text).color(YELLOW).strong().size(12.0)
 }
-pub fn badges(table: &kortex_domain::Table, column: &kortex_domain::Column) -> String {
-    let mut result = String::new();
-    if table.primary_key.contains(&column.name) {
-        result.push_str("⚿ PK ");
-    }
-    if table
-        .foreign_keys
-        .iter()
-        .any(|f| f.columns.contains(&column.name))
-    {
-        result.push_str("↗ FK ");
-    }
-    if table.unique_keys.iter().any(|k| k.contains(&column.name)) {
-        result.push_str("◇ UQ ");
-    }
-    if column.nullable {
-        result.push_str("○ NULL ");
-    }
-    if column.generated {
-        result.push_str("ƒ ");
-    }
-    result
-}

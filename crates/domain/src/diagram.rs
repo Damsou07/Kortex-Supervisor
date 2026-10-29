@@ -77,18 +77,23 @@ pub struct Diagram {
 }
 impl Diagram {
     pub fn reconcile(&mut self, tables: &[Table]) {
-        let mut next = self.positions.len();
+        let catalog = Catalog {
+            tables: tables.to_vec(),
+            ..Catalog::default()
+        };
+        let mut input = LayoutInput::new(&catalog, self);
+        input.fixed = self.positions.keys().cloned().collect();
+        if tables
+            .iter()
+            .all(|t| self.positions.contains_key(&t.stable_id))
+        {
+            return;
+        }
+        let next = place_diagram(&input);
         for t in tables {
             self.positions
                 .entry(t.stable_id.clone())
-                .or_insert_with(|| {
-                    let point = Point {
-                        x: (next % 5) as f32 * 340.0 + 40.0,
-                        y: (next / 5) as f32 * 460.0 + 60.0,
-                    };
-                    next += 1;
-                    point
-                });
+                .or_insert(next[&t.stable_id]);
         }
     }
     pub fn move_tables(&mut self, ids: &[String], delta: Point) {

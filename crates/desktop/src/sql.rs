@@ -221,7 +221,7 @@ pub fn show(ui: &mut Ui, view: &mut SqlView, catalog: &Catalog) -> SqlAction {
                         (!range.is_empty()).then_some(range.start.0..range.end.0)
                     });
                     if output.response.has_focus()
-                        && ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
+                        && crate::shortcuts::consume(ui.ctx(), crate::shortcuts::Command::Execute)
                         && !view.running
                         && view.connected
                     {

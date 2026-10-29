@@ -1,4 +1,4 @@
-use crate::theme;
+use crate::{columns, theme};
 use egui::{RichText, Ui};
 use egui_extras::{Column as UiColumn, TableBuilder};
 use kortex_application::GridState;
@@ -144,7 +144,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
                 let mut remove = None;
                 for (i, filter) in view.query.filters.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt(("filter_col", i))
+                        egui::ComboBox::new(("filter_col", i), "Colonne")
                             .selected_text(&filter.column)
                             .show_ui(ui, |ui| {
                                 for col in &view.table.columns {
@@ -155,7 +155,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
                                     );
                                 }
                             });
-                        egui::ComboBox::from_id_salt(("filter_op", i))
+                        egui::ComboBox::new(("filter_op", i), "Opérateur")
                             .selected_text(filter.op.label())
                             .show_ui(ui, |ui| {
                                 for op in FilterOp::ALL {
@@ -274,6 +274,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
     }
     ui.separator();
     let table = &view.table;
+    columns::legend(ui);
     let rows = view.grid.page.rows.len();
     let can_edit = !table.identity_columns().is_empty() && !view.applying && view.schema_valid;
     let height = (ui.available_height() - 45.0).max(80.0);
@@ -286,31 +287,16 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(UiColumn::initial(52.0).at_least(45.0));
         for _ in &table.columns {
-            builder = builder.column(UiColumn::initial(160.0).at_least(80.0));
+            builder = builder.column(UiColumn::initial(200.0).at_least(100.0));
         }
         builder
-            .header(34.0, |mut header| {
+            .header(48.0, |mut header| {
                 header.col(|ui| {
                     ui.strong("Ligne");
                 });
                 for (i, col) in table.columns.iter().enumerate() {
                     header.col(|ui| {
-                        let label = format!("{} {}", theme::badges(table, col), col.name);
-                        if ui
-                            .add_enabled(
-                                !dirty && view.pending.is_none(),
-                                egui::Button::new(RichText::new(label).strong()).frame(false),
-                            )
-                            .on_hover_text(format!(
-                                "{}\n{}\n{}",
-                                col.data_type,
-                                col.comment,
-                                if col.nullable {
-                                    "NULL autorisé"
-                                } else {
-                                    "NOT NULL"
-                                }
-                            ))
+                        if columns::header(ui, table, col, !dirty && view.pending.is_none())
                             .clicked()
                         {
                             sorted = Some((i, ui.input(|i| i.modifiers.shift)));
@@ -464,7 +450,7 @@ fn input_ui(ui: &mut Ui, value: &mut InputValue, required: bool, default_allowed
         InputValue::Null => 1,
         InputValue::Default => 2,
     };
-    egui::ComboBox::from_id_salt(ui.next_auto_id())
+    egui::ComboBox::new(ui.next_auto_id(), "Saisie")
         .selected_text(["Valeur", "NULL", "DEFAULT"][kind])
         .width(80.0)
         .show_ui(ui, |ui| {

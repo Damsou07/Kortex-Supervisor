@@ -16,7 +16,7 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked -j 1
       - name: PostgreSQL TLS on Windows
         run: ./scripts/Test-PgMatrix.ps1 -Major '17' -Tls
       - name: Performance regression
