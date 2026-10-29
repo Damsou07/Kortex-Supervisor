@@ -154,6 +154,22 @@ fn mcd_renders_keys_constraints_and_relations_without_mutating_catalog() {
     harness.get_by_label("Bleu nuit").click();
     harness.run();
     harness.snapshot("mcd_midnight");
+    for (label, snapshot) in [
+        ("Obsidienne rouge", "mcd_obsidian"),
+        ("Émeraude", "mcd_emerald"),
+        ("Améthyste", "mcd_amethyst"),
+        ("Contraste élevé", "mcd_high_contrast"),
+    ] {
+        harness.get_by_label("Thème MCD").click();
+        harness.run();
+        harness.get_by_label(label).click();
+        harness.run();
+        harness.snapshot(snapshot);
+    }
+    harness.get_by_label("Thème MCD").click();
+    harness.run();
+    harness.get_by_label("Bleu nuit").click();
+    harness.run();
     harness.get_by_label("Légende").click();
     harness.run();
     harness.get_by_label("Détaillée").click();
@@ -162,4 +178,53 @@ fn mcd_renders_keys_constraints_and_relations_without_mutating_catalog() {
     harness.run();
     assert!(harness.query_by_label("Clé primaire").is_some());
     harness.snapshot("legend_detailed");
+}
+
+#[test]
+fn legend_cards_preserve_type_and_key_meanings_in_every_palette() {
+    use kortex_infrastructure::storage::{Appearance, DiagramTheme, LegendPalette, LegendStyle};
+    use kortex_supervisor::{columns, theme};
+
+    let mut snapshot_results = egui_kittest::SnapshotResults::new();
+    for (palette, snapshot) in [
+        (LegendPalette::FollowDiagram, "legend_cards_follow_mcd"),
+        (LegendPalette::Neutral, "legend_cards_neutral"),
+        (LegendPalette::HighContrast, "legend_cards_high_contrast"),
+    ] {
+        let mut initialized = false;
+        let mut harness = Harness::builder()
+            .with_size([650.0, 800.0])
+            .build_ui(move |ui| {
+                if !initialized {
+                    theme::apply(ui.ctx());
+                    theme::set_appearance(
+                        ui.ctx(),
+                        Appearance {
+                            diagram_theme: DiagramTheme::Emerald,
+                            legend_style: LegendStyle::Cards,
+                            legend_palette: palette,
+                        },
+                    );
+                    initialized = true;
+                }
+                columns::legend(ui);
+            });
+        harness.run();
+        harness.get_by_label("Légende").click();
+        harness.run();
+        for label in ["● Nombres", "● Textes"] {
+            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+        }
+        harness.snapshot(snapshot);
+        for _ in 0..4 {
+            harness.get_by_label("● Nombres").scroll_down();
+        }
+        harness.run();
+        for label in ["Clé primaire", "Clé étrangère"] {
+            assert!(harness.query_by_label(label).is_some(), "missing {label}");
+        }
+        harness.snapshot(format!("{snapshot}_keys"));
+        snapshot_results.extend_harness(&mut harness);
+    }
+    snapshot_results.into_result().unwrap();
 }

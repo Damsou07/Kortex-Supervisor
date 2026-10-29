@@ -12,6 +12,10 @@ pub enum DiagramTheme {
     #[default]
     Modern,
     Midnight,
+    Obsidian,
+    Emerald,
+    Amethyst,
+    HighContrast,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,6 +23,15 @@ pub enum LegendStyle {
     #[default]
     Compact,
     Detailed,
+    Cards,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LegendPalette {
+    #[default]
+    FollowDiagram,
+    Neutral,
+    HighContrast,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +39,7 @@ pub enum LegendStyle {
 pub struct Appearance {
     pub diagram_theme: DiagramTheme,
     pub legend_style: LegendStyle,
+    pub legend_palette: LegendPalette,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

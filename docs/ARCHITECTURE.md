@@ -22,6 +22,8 @@ Les opérations applicatives sur les groupes utilisent un `GroupDraft`. Valider 
 
 Le format persistant `Diagram` reste inchangé : positions, groupes et retouches manuelles de `Route`. Les chemins automatiques et les états transitoires de sélection/brouillon ne sont pas sérialisés. La réconciliation conserve les positions existantes et place les nouvelles tables dans un espace libre. Aucun changement du catalogue ou des données n’est déclenché par ces fonctions.
 
+Les six palettes MCD centralisent les surfaces, textes, contours, relations et états de sélection. Les légendes combinent une présentation (compacte, détaillée ou cartes) et une palette indépendante ; les couleurs sémantiques des types et des clés restent communes. Les réglages d’apparence sont partagés dans le contexte egui et persistés avec des valeurs par défaut rétrocompatibles. Le zoom du canvas vérifie la couche sous le pointeur pour respecter les popups. Les fenêtres complètes mémorisent le focus texte de la frame précédente afin que le premier Échap libère le champ sans quitter le plein écran.
+
 ## Concurrence et volumes
 
 Les files de commandes et de résultats sont bornées. Chaque requête possède un identifiant ; les vues de données n’acceptent que leur réponse attendue. Le rendu n’attend pas les requêtes. Les résultats SQL arrivent par blocs de 200 lignes ; les pages du tableur sont limitées à 200 lignes par défaut.

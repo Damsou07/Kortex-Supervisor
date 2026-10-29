@@ -26,11 +26,11 @@ Le paquet portable se construit avec `./scripts/Build-Release.ps1`. L’exécuta
 - Tableur paginé : tri multiple avec Maj+clic, filtres combinables, ajout et suppression de lignes, édition par double-clic sur une cellule.
 - **Appliquer** enregistre le lot dans une transaction ; **Annuler les modifications** abandonne le brouillon. Les conflits externes empêchent l’écrasement silencieux des données.
 - Éditeur SQL à sessions indépendantes : scripts, sélection, Ctrl+Entrée, insertion des objets connus, résultats multiples et annulation côté moteur.
-- MCD : dispositions automatiques compacte et espacée, deux thèmes sombres, liens orthogonaux et cardinalités réparties, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
+- MCD : dispositions automatiques compacte et espacée, six thèmes sombres (Graphite, Bleu nuit, Obsidienne rouge, Émeraude, Améthyste et Contraste élevé), liens orthogonaux et cardinalités réparties, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
 - Groupes : panneau dédié, sélection rectangulaire, cadres automatiquement ajustés aux tables et fenêtres natives partageant la disposition. Le MCD complet peut aussi être ouvert maximisé ou en plein écran.
-- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD, légendes compacte ou détaillée et badges vectoriels PK/FK/UQ séparés.
+- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD, légendes compacte, détaillée ou en cartes et badges vectoriels PK/FK/UQ séparés. La palette de légende peut suivre le MCD, rester neutre ou renforcer le contraste.
 - Onglets avec fermeture intégrée et indicateur de brouillon ; catalogue des raccourcis et gestes souris dans **Paramètres → Raccourcis clavier** (**F1**).
-- Panneaux déplaçables par leur onglet et redimensionnables. Disposition et groupes enregistrés localement.
+- Panneaux déplaçables par leur onglet et redimensionnables. Disposition, groupes et choix d’apparence enregistrés localement.
 
 **Le MCD ne modifie jamais la base.** La création/modification des tables, colonnes et contraintes passe par l’éditeur SQL.
 

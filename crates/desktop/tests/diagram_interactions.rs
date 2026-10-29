@@ -10,6 +10,113 @@ struct State {
 }
 
 #[test]
+fn legend_scroll_does_not_zoom_the_canvas_but_wheel_over_a_table_does() {
+    use kortex_infrastructure::storage::{Appearance, LegendStyle};
+    let catalog = Catalog {
+        tables: vec![Table {
+            stable_id: "t".into(),
+            id: ObjectId::new("main", "table"),
+            columns: vec![Column::new("id", "integer", false)],
+            ..Table::default()
+        }],
+        ..Catalog::default()
+    };
+    let mut layout = Diagram::default();
+    layout
+        .positions
+        .insert("t".into(), Point { x: 50.0, y: 50.0 });
+    let mut view = DiagramView::default();
+    view.fit = false;
+    view.zoom = 1.0;
+    view.prepare_geometry(&catalog, &layout);
+    let mut initialized = false;
+    let mut harness = Harness::builder()
+        .with_size([1100.0, 700.0])
+        .build_ui_state(
+            move |ui, state: &mut State| {
+                if !initialized {
+                    kortex_supervisor::theme::apply(ui.ctx());
+                    kortex_supervisor::theme::set_appearance(
+                        ui.ctx(),
+                        Appearance {
+                            legend_style: LegendStyle::Cards,
+                            ..Appearance::default()
+                        },
+                    );
+                    initialized = true;
+                }
+                mcd::show(
+                    ui,
+                    &state.catalog,
+                    &mut state.layout,
+                    &mut state.history,
+                    &mut state.view,
+                    None,
+                );
+            },
+            State {
+                catalog,
+                layout,
+                history: LayoutHistory::default(),
+                view,
+            },
+        );
+    harness.run();
+    harness.get_by_label("Légende").click();
+    harness.run();
+    // The palette row is outside the scrolling content: its wheel input must
+    // still be blocked by the popup layer when no scroll area consumes it.
+    let popup_point = harness.get_by_label("Palette").rect().center();
+    assert!(harness.state().view.canvas.contains(popup_point));
+    harness.hover_at(popup_point);
+    harness.step();
+    let zoom = harness.state().view.zoom;
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, -120.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    assert_eq!(
+        harness.state().view.zoom,
+        zoom,
+        "scrolling the legend must not zoom the diagram behind it"
+    );
+    let card_point = harness.get_by_label("● Nombres").rect().center();
+    harness.hover_at(card_point);
+    harness.step();
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, -120.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run();
+    assert_eq!(harness.state().view.zoom, zoom);
+
+    harness.key_combination(&[egui::Key::Escape]);
+    harness.run();
+    let table_point = harness.state().view.canvas.min + egui::vec2(80.0, 105.0);
+    harness.hover_at(table_point);
+    harness.step();
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, -120.0),
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(12);
+    assert!(
+        harness.state().view.zoom < zoom,
+        "the table must not prevent wheel zoom on the canvas"
+    );
+}
+
+#[test]
 fn pan_mode_selects_table_by_its_body_and_header_can_be_dragged() {
     let catalog = Catalog {
         tables: vec![Table {

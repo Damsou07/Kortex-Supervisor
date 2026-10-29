@@ -275,10 +275,11 @@ pub fn show(
             view.cardinalities_open = true;
         }
     });
+    let palette = theme::diagram_palette(ui.ctx());
     if view.groups_open {
         groups::show(ui, catalog, layout, history, view, &mut action, subset);
     }
-    ui.label(egui::RichText::new("Glisser : déplacer · Maj+clic : sélection multiple · Molette : zoom · Fond : déplacer la vue · Double-clic sur un lien : point de passage").small().color(theme::MUTED));
+    ui.label(egui::RichText::new("Glisser : déplacer · Maj+clic : sélection multiple · Molette : zoom · Fond : déplacer la vue · Double-clic sur un lien : point de passage").small().color(palette.muted));
     let (canvas, background) = ui.allocate_exact_size(
         ui.available_size().max(egui::vec2(100.0, 100.0)),
         Sense::click_and_drag(),
@@ -320,7 +321,6 @@ pub fn show(
         }
     }
     let painter = ui.painter().with_clip_rect(canvas);
-    let palette = theme::diagram_palette(ui.ctx());
     let mut arrowheads = Vec::new();
     painter.rect_filled(canvas, 0.0, palette.canvas);
     if view.fit {
@@ -375,9 +375,7 @@ pub fn show(
             view.selection_start = None;
         }
     }
-    if background.hovered()
-        || canvas.contains(ui.input(|i| i.pointer.hover_pos().unwrap_or(Pos2::ZERO)))
-    {
+    if ui.rect_contains_pointer(canvas) {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 0.01 {
             let pos = ui
@@ -444,7 +442,7 @@ pub fn show(
                 (rect.width() - 24.0 * view.zoom).max(0.0),
             ),
             FontId::proportional(16.0 * view.zoom),
-            theme::YELLOW,
+            palette.selection,
         );
         let header = Rect::from_min_size(rect.min, egui::vec2(rect.width(), 35.0 * view.zoom));
         let response = ui.interact(
@@ -614,7 +612,7 @@ pub fn show(
                         .any(|s| distance_to_segment(p, s[0], s[1]) < 5.0)
             });
         let color = if selected || hovered {
-            theme::YELLOW
+            palette.selection
         } else {
             palette.relation
         };
@@ -764,7 +762,7 @@ pub fn show(
                 if !handle.intersects(canvas) {
                     continue;
                 }
-                painter.circle_filled(screen, 5.0, theme::YELLOW);
+                painter.circle_filled(screen, 5.0, palette.selection);
                 let r = ui.interact(
                     handle.intersect(canvas),
                     egui::Id::unique(("waypoint", &fk.id, i)),
@@ -795,7 +793,7 @@ pub fn show(
                 if !handle.intersects(canvas) {
                     continue;
                 }
-                painter.circle_filled(p, 4.0, theme::RED);
+                painter.circle_filled(p, 4.0, palette.handle);
                 let r = ui.interact(
                     handle.intersect(canvas),
                     egui::Id::unique(("anchor", &fk.id, is_source)),
@@ -851,7 +849,7 @@ pub fn show(
             Stroke::new(
                 if selected { 2.0 } else { 1.0 },
                 if selected {
-                    theme::YELLOW
+                    palette.selection
                 } else {
                     palette.border
                 },
@@ -868,7 +866,7 @@ pub fn show(
                 (header.width() - 18.0 * view.zoom).max(0.0),
             ),
             FontId::proportional(15.0 * view.zoom),
-            Color32::WHITE,
+            palette.text,
         );
         for (i, col) in table.columns.iter().enumerate() {
             let row = Rect::from_min_size(
@@ -876,7 +874,15 @@ pub fn show(
                 egui::vec2(rect.width(), ROW_HEIGHT * view.zoom),
             );
             if row.intersects(canvas) {
-                columns::paint_row(&painter, row, table, col, view.zoom);
+                columns::paint_row_with_palette(
+                    &painter,
+                    row,
+                    table,
+                    col,
+                    view.zoom,
+                    palette.text,
+                    palette.muted,
+                );
             }
         }
         painter.text(
@@ -888,7 +894,7 @@ pub fn show(
                 table.constraints.len()
             ),
             FontId::proportional(10.0 * view.zoom),
-            theme::MUTED,
+            palette.muted,
         );
         let header_response = ui.interact(
             header.intersect(canvas),
@@ -978,7 +984,7 @@ pub fn show(
         .filter(|(anchor, _, _, _)| canvas.expand(20.0).contains(*anchor))
         .map(
             |(anchor, align, text, detail): (Pos2, Align2, String, String)| {
-                let galley = painter.layout_no_wrap(text, font.clone(), theme::YELLOW);
+                let galley = painter.layout_no_wrap(text, font.clone(), palette.cardinality);
                 let rect = align.anchor_rect(Rect::from_min_size(anchor, galley.size()));
                 (anchor, galley, rect, detail)
             },
@@ -995,11 +1001,14 @@ pub fn show(
             continue;
         }
         if placed != preferred {
-            painter.line_segment([anchor, placed.center()], Stroke::new(0.8, theme::YELLOW));
+            painter.line_segment(
+                [anchor, placed.center()],
+                Stroke::new(0.8, palette.cardinality),
+            );
         }
         // A background keeps text legible if a displaced label crosses a card.
         painter.rect_filled(placed.expand(1.0), 2.0, palette.canvas);
-        painter.galley(placed.min, galley, theme::YELLOW);
+        painter.galley(placed.min, galley, palette.cardinality);
     }
     if view.overflow_cardinalities != overflow {
         view.overflow_cardinalities = overflow;
@@ -1030,15 +1039,11 @@ pub fn show(
         && let Some(end) = ui.input(|i| i.pointer.interact_pos())
     {
         let selection = Rect::from_two_pos(start, end).intersect(canvas);
-        painter.rect_filled(
-            selection,
-            0.0,
-            Color32::from_rgba_unmultiplied(100, 160, 255, 30),
-        );
+        painter.rect_filled(selection, 0.0, palette.selection_fill);
         painter.rect_stroke(
             selection,
             0.0,
-            Stroke::new(1.0, Color32::LIGHT_BLUE),
+            Stroke::new(1.0, palette.selection),
             StrokeKind::Inside,
         );
     }

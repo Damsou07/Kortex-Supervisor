@@ -59,6 +59,7 @@ struct Detached {
     title: String,
     members: Option<Vec<String>>,
     view: DiagramView,
+    text_edit_was_focused: bool,
 }
 #[derive(Clone)]
 enum Job {
@@ -1207,6 +1208,7 @@ impl KortexApp {
                 title,
                 members,
                 view: DiagramView::default(),
+                text_edit_was_focused: false,
             });
         }
     }
@@ -1449,11 +1451,11 @@ impl KortexApp {
                             if window.members.is_none() {
                                 let fullscreen =
                                     ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
-                                let escape = fullscreen
-                                    && !ui.ctx().text_edit_focused()
-                                    && ui.ctx().input_mut(|i| {
-                                        i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-                                    });
+                                let escape = consume_fullscreen_escape(
+                                    ui.ctx(),
+                                    fullscreen,
+                                    window.text_edit_was_focused,
+                                );
                                 if ui
                                     .button(if fullscreen {
                                         "Quitter le plein écran"
@@ -1477,6 +1479,7 @@ impl KortexApp {
                                 &mut window.view,
                                 window.members.as_deref(),
                             ));
+                            window.text_edit_was_focused = ui.ctx().text_edit_focused();
                         });
                     },
                 );
@@ -1491,6 +1494,18 @@ impl KortexApp {
             }
         }
     }
+}
+// Egui may release text focus when Escape arrives, before this frame's widgets
+// are drawn. Remembering the previous frame keeps that Escape in the text field.
+fn consume_fullscreen_escape(
+    ctx: &egui::Context,
+    fullscreen: bool,
+    text_edit_was_focused: bool,
+) -> bool {
+    fullscreen
+        && !text_edit_was_focused
+        && !ctx.text_edit_focused()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 impl egui_tiles::Behavior<Pane> for KortexApp {
     fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
@@ -1572,7 +1587,63 @@ fn default_layout() -> egui_tiles::Tree<Pane> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::Harness;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn fullscreen_escape_respects_text_focus_before_egui_clears_it() {
+        #[derive(Default)]
+        struct State {
+            text: String,
+            text_was_focused: bool,
+            fullscreen: bool,
+        }
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, state: &mut State| {
+                if consume_fullscreen_escape(ui.ctx(), state.fullscreen, state.text_was_focused) {
+                    state.fullscreen = false;
+                }
+                ui.add(egui::TextEdit::singleline(&mut state.text).hint_text("Recherche de test"));
+                state.text_was_focused = ui.ctx().text_edit_focused();
+            },
+            State {
+                fullscreen: true,
+                ..Default::default()
+            },
+        );
+        harness.run();
+        harness.get_by_role(egui::Role::TextInput).click();
+        harness.run();
+        assert!(harness.state().text_was_focused);
+        harness.key_combination(&[egui::Key::Escape]);
+        harness.run();
+        assert!(
+            harness.state().fullscreen,
+            "Escape in a text field must not leave fullscreen"
+        );
+        harness.key_combination(&[egui::Key::Escape]);
+        harness.run();
+        assert!(
+            !harness.state().fullscreen,
+            "Escape after text focus is released must leave fullscreen"
+        );
+    }
+
+    #[test]
+    fn fullscreen_escape_is_consumed_before_canvas_cancel() {
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, exited: &mut bool| {
+                if consume_fullscreen_escape(ui.ctx(), true, false) {
+                    *exited = true;
+                    assert!(!shortcuts::consume(ui.ctx(), Command::Cancel));
+                }
+            },
+            false,
+        );
+        harness.run();
+        harness.key_combination(&[egui::Key::Escape]);
+        harness.run();
+        assert!(*harness.state());
+    }
     #[test]
     fn detached_full_diagram_has_unrestricted_scope_and_selection_remains_scoped() {
         let mut app = KortexApp::for_test();

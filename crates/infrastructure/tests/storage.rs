@@ -3,17 +3,69 @@ use kortex_infrastructure::storage::{self, Preferences};
 
 #[test]
 fn old_preferences_choose_default_appearance() {
-    use kortex_infrastructure::storage::{DiagramTheme, LegendStyle};
+    use kortex_infrastructure::storage::{DiagramTheme, LegendPalette, LegendStyle};
     let prefs: Preferences = serde_json::from_str(r#"{"version":1}"#).unwrap();
     assert_eq!(prefs.appearance.diagram_theme, DiagramTheme::Modern);
     assert_eq!(prefs.appearance.legend_style, LegendStyle::Compact);
+    assert_eq!(
+        prefs.appearance.legend_palette,
+        LegendPalette::FollowDiagram
+    );
+    let previous: storage::Appearance =
+        serde_json::from_str(r#"{"diagram_theme":"Midnight","legend_style":"Detailed"}"#).unwrap();
+    assert_eq!(previous.diagram_theme, DiagramTheme::Midnight);
+    assert_eq!(previous.legend_style, LegendStyle::Detailed);
+    assert_eq!(previous.legend_palette, LegendPalette::FollowDiagram);
     let updated = storage::Appearance {
         diagram_theme: DiagramTheme::Midnight,
         legend_style: LegendStyle::Detailed,
+        legend_palette: LegendPalette::Neutral,
     };
     let restored: storage::Appearance =
         serde_json::from_str(&serde_json::to_string(&updated).unwrap()).unwrap();
     assert_eq!(restored, updated);
+}
+
+#[test]
+fn all_appearance_choices_round_trip_without_changing_existing_names() {
+    use storage::{Appearance, DiagramTheme, LegendPalette, LegendStyle};
+    assert_eq!(
+        serde_json::to_string(&DiagramTheme::Modern).unwrap(),
+        "\"Modern\""
+    );
+    assert_eq!(
+        serde_json::to_string(&DiagramTheme::Midnight).unwrap(),
+        "\"Midnight\""
+    );
+    for diagram_theme in [
+        DiagramTheme::Modern,
+        DiagramTheme::Midnight,
+        DiagramTheme::Obsidian,
+        DiagramTheme::Emerald,
+        DiagramTheme::Amethyst,
+        DiagramTheme::HighContrast,
+    ] {
+        for legend_style in [
+            LegendStyle::Compact,
+            LegendStyle::Detailed,
+            LegendStyle::Cards,
+        ] {
+            for legend_palette in [
+                LegendPalette::FollowDiagram,
+                LegendPalette::Neutral,
+                LegendPalette::HighContrast,
+            ] {
+                let appearance = Appearance {
+                    diagram_theme,
+                    legend_style,
+                    legend_palette,
+                };
+                let restored: Appearance =
+                    serde_json::from_str(&serde_json::to_string(&appearance).unwrap()).unwrap();
+                assert_eq!(restored, appearance);
+            }
+        }
+    }
 }
 
 #[test]
