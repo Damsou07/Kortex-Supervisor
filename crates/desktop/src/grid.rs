@@ -81,6 +81,23 @@ pub struct GridAction {
 }
 pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
     let mut action = GridAction::default();
+    ui.scope(|ui| {
+        // Reserve the footer before any scroll area can consume the pane height.
+        egui::Panel::bottom(ui.scope_id().with("grid_pagination"))
+            .frame(egui::Frame::NONE)
+            .resizable(false)
+            .show(ui, |ui| pagination(ui, view, &mut action));
+        egui::ScrollArea::vertical()
+            .id_salt("grid_controls")
+            .min_scrolled_height(0.0)
+            .max_height((ui.available_height() * 0.5).max(0.0))
+            .auto_shrink([false, true])
+            .show(ui, |ui| controls(ui, view, &mut action));
+        show_table(ui, view, &mut action);
+    });
+    action
+}
+fn controls(ui: &mut Ui, view: &mut DataView, action: &mut GridAction) {
     let dirty = view.grid.dirty();
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(view.table.id.label()).strong().size(18.0));
@@ -143,7 +160,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
             ui.add_enabled_ui(!dirty && view.pending.is_none(), |ui| {
                 let mut remove = None;
                 for (i, filter) in view.query.filters.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         egui::ComboBox::new(("filter_col", i), "Colonne")
                             .selected_text(&filter.column)
                             .show_ui(ui, |ui| {
@@ -177,7 +194,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
                 if let Some(i) = remove {
                     view.query.filters.remove(i);
                 }
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.button("+ Filtre").clicked()
                         && let Some(col) = view.table.columns.first()
                     {
@@ -273,16 +290,25 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
             });
     }
     ui.separator();
-    let table = &view.table;
     columns::legend(ui);
+}
+fn show_table(ui: &mut Ui, view: &mut DataView, action: &mut GridAction) {
+    let dirty = view.grid.dirty();
+    let table = &view.table;
+
     let rows = view.grid.page.rows.len();
     let can_edit = !table.identity_columns().is_empty() && !view.applying && view.schema_valid;
-    let height = (ui.available_height() - 45.0).max(80.0);
+    let height = (ui.available_height()
+        - 48.0
+        - ui.spacing().item_spacing.y
+        - ui.spacing().scroll.allocated_width())
+    .max(0.0);
     let mut sorted = None;
     egui::ScrollArea::horizontal().show(ui, |ui| {
         let mut builder = TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
+            .min_scrolled_height(0.0)
             .max_scroll_height(height)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(UiColumn::initial(52.0).at_least(45.0));
@@ -394,7 +420,11 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
         view.page_stack.clear();
         action.refresh = true;
     }
-    ui.horizontal(|ui| {
+}
+fn pagination(ui: &mut Ui, view: &mut DataView, action: &mut GridAction) {
+    let dirty = view.grid.dirty();
+    let rows = view.grid.page.rows.len();
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
                 !dirty && !view.page_stack.is_empty() && view.pending.is_none(),
@@ -430,7 +460,7 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
                 .page
                 .rows
                 .last()
-                .and_then(|r| cursor_for(table, &view.query, r));
+                .and_then(|r| cursor_for(&view.table, &view.query, r));
             view.query.offset += view.query.limit;
             action.refresh = true;
         }
@@ -442,7 +472,6 @@ pub fn show(ui: &mut Ui, view: &mut DataView) -> GridAction {
             .color(theme::MUTED),
         );
     });
-    action
 }
 fn input_ui(ui: &mut Ui, value: &mut InputValue, required: bool, default_allowed: bool) {
     let mut kind = match value {

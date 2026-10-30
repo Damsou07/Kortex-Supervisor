@@ -48,6 +48,16 @@ TLS vérifie le certificat et le nom du serveur. Aucun mécanisme de désactivat
 
 Les préférences sont écrites dans un fichier temporaire du même dossier, synchronisées puis remplacées atomiquement. Une configuration mal formée ou d’une version inconnue est conservée et sa réécriture automatique est désactivée.
 
+La vue des chemins locaux est un modèle de présentation privé, constitué à l’entrée de l’onglet pour éviter des accès disque à chaque frame. Elle utilise le résolveur de configuration existant et les profils, sans requête SQL ni création de fichier. Le chemin résolu est distinct de l’autorisation de sauvegarder, afin de rester consultable après une erreur de chargement. Aucun format persistant ni port applicatif n’est modifié.
+
+Le tableur réserve le pied de pagination avant ses zones défilantes. Les contrôles supérieurs sont bornés et le corps conserve sa virtualisation, sans imposer une hauteur minimale qui ferait déborder le panneau.
+
+## Livraison Windows
+
+`Build-Release.ps1 -Installer` fabrique le ZIP et le setup depuis un même staging neuf : exécutable, runtime Microsoft, documentation, icône et notices. Le manifeste reprend la version Cargo et les SHA-256 du payload. Inno Setup 7.1.1 est un outil de build portable, sans dépendance ajoutée à l’exécution ; son téléchargement est vérifié par empreinte et signature Authenticode.
+
+L’identité de l’installateur est stable entre versions. Le mode courant est proposé sans élévation ; le mode commun demande les droits administrateur. Aucun script de suppression récursive, migration des données ou effacement de configuration/secrets n’est inclus dans la désinstallation. La publication et la signature du produit restent hors de cette livraison locale.
+
 ## Travail futur
 
 Les interfaces permettent d’autres moteurs et plateformes. La publication, la licence du projet, la signature Windows, les mises à jour automatiques, le tunnel SSH intégré et la modification graphique du schéma restent des décisions futures explicites.

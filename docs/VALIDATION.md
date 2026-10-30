@@ -66,6 +66,24 @@ La CI est fournie mais n’a pas été exécutée sur GitHub pendant cette livra
 - Contrôle Windows partiel : les binaires debug et release ont été lancés avec la base de démonstration et des préférences isolées sous `target/native-ui-fixes*`. Le démarrage, le logo agrandi et le chargement du catalogue de démonstration ont été observés. L’automatisation a ensuite été arrêtée par l’utilisateur avec la touche physique Échap. Les glissements natifs complets, le redimensionnement, les fenêtres détachées et la restauration au redémarrage ne sont donc pas revendiqués comme validés manuellement pour cette livraison ; leurs scénarios automatisés restent couverts. Les autres écrans et facteurs DPI n’ont pas été contrôlés.
 - Livraison portable : reconstruite avec `scripts/Build-Release.ps1` ; exécutable et DLL dans `dist/Kortex-Supervisor/`, archive et empreinte dans `dist/Kortex-Supervisor-windows-x64.zip` et son fichier `.sha256`. Les empreintes locales des binaires sont consignées dans `target/ui-fixes-delivery.json`.
 
+## Pagination, chemins locaux et installateur du 30 octobre 2026
+
+- TDD : les nouveaux tests ont reproduit la pagination hors panneau à 1000 × 650 (bouton situé entre y=649 et y=674), le clic Suivant inaccessible et l’absence de setup. Après correction, les contrôles restent visibles avec 200 lignes, 12 colonnes, filtres ouverts et éditeur actif dans un panneau de 340 × 260. Les changements de page et les blocages pendant chargement/brouillon sont vérifiés.
+- `cargo fmt --all -- --check`, Clippy `--workspace --all-targets --locked -- -D warnings` et `cargo test --workspace --locked -j 1` réussissent : **98 tests réussis, quatre tests spécialisés ignorés**. Les fichiers temporaires sont isolés sous `target/installer-test-temp` pour permettre les remplacements atomiques dans ce sandbox. Journaux : `target/installer-clippy.log` et `target/installer-workspace-tests.log`.
+- Chemins : fichiers absents, chemins longs, SQLite et WAL, CA PostgreSQL, lecture seule, navigation F1 et conservation des profils sont couverts. Une configuration JSON invalide ou de version inconnue reste consultable par son chemin et n’est pas écrasée. Les captures du tableau, du panneau réduit, des chemins et des raccourcis ont été relues.
+- Contrôle natif avec une base SQLite jetable de 450 lignes et `KORTEX_CONFIG_DIR` isolé sous `target/installer-native` : affichage des pages 1–200, 201–400 et 401–450, bouton Suivant désactivé à la fin, retour à la page précédente, chemins effectifs et ouverture des raccourcis par F1 vérifiés. La fermeture native réussit. Le coffre Windows refuse l’accès depuis le sandbox (erreur 5) ; aucun test de stockage de secret n’est revendiqué pour cette livraison.
+- Build release et compilation Inno Setup 7.1.1 réussis. Le compilateur officiel a été préparé en mode portable après vérification SHA-256 et Authenticode. `Test-Package.ps1` vérifie la version **0.1.0**, les **20 fichiers** du manifeste, les DLL, le contenu du ZIP et les empreintes du ZIP et du setup. Les espaces de remplissage des ressources de version Windows sont retirés avant comparaison. Le binaire release livré a aussi été lancé avec ses DLL dans un dossier isolé, après comparaison de son empreinte, et sa fenêtre s’affiche. Les métadonnées de livraison sont conservées dans `target/installer-delivery.json`.
+- L’aperçu du setup a été lancé sans installer le produit. L’outil de contrôle Windows a expiré lors de l’autorisation d’accès à sa fenêtre : la revue visuelle complète de l’assistant reste non vérifiée. Aucun environnement Windows jetable n’est disponible localement pour installer, réinstaller ou désinstaller réellement le produit dans les deux modes. Le script `scripts/Test-Installer.ps1 -DisposableEnvironment` et son étape CI préparent ces vérifications, y compris les raccourcis, la reprise du dossier précédent et la conservation des fichiers utilisateur. Cette CI n’a pas été exécutée à distance.
+
+Pour tester le cycle d’installation, utiliser **uniquement une VM Windows jetable**, avec les droits nécessaires au mode commun :
+
+```powershell
+./scripts/Build-Release.ps1 -Installer
+./scripts/Test-Installer.ps1 -DisposableEnvironment
+```
+
+Le script refuse de démarrer sans cette option et refuse d’écraser une installation ou des raccourcis préexistants. Les tests PostgreSQL/TLS et les benchmarks spécialisés n’ont pas été relancés pour ces modifications de présentation et de packaging.
+
 ## Limites explicites du MVP
 
 - Les fichiers `.db` doivent être des bases SQLite non chiffrées. SQLCipher et les autres moteurs utilisant cette extension ne sont pas pris en charge.

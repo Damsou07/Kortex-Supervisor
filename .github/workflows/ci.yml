@@ -25,12 +25,20 @@ jobs:
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit
-      - name: Portable Windows package
-        run: ./scripts/Build-Release.ps1
+      - name: Prepare pinned portable Inno Setup compiler
+        run: ./scripts/Get-InnoSetup.ps1
+      - name: Windows ZIP and installer
+        run: ./scripts/Build-Release.ps1 -Installer
+      - name: Install, reinstall and uninstall on disposable runner
+        run: ./scripts/Test-Installer.ps1 -DisposableEnvironment
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: Kortex-Supervisor-windows-x64
-          path: dist/Kortex-Supervisor-windows-x64.zip
+          path: |
+            dist/Kortex-Supervisor-windows-x64.zip
+            dist/Kortex-Supervisor-windows-x64.zip.sha256
+            dist/setup.exe
+            dist/setup.exe.sha256
 
   postgres:
     runs-on: ubuntu-latest

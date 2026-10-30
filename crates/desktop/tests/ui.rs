@@ -3,6 +3,36 @@ use kortex_domain::*;
 use kortex_supervisor::app::KortexApp;
 
 #[test]
+fn settings_expose_read_only_local_paths_and_keep_f1_navigation() {
+    let mut app = KortexApp::for_test();
+    let mut initialized = false;
+    let mut h = Harness::builder()
+        .with_accessibility_check(false)
+        .with_size([1000.0, 650.0])
+        .build_ui(move |ui| {
+            if !initialized {
+                kortex_supervisor::theme::apply(ui.ctx());
+                initialized = true;
+            }
+            app.render(ui);
+        });
+    h.run();
+    h.get_by_label("Paramètres").click();
+    h.run();
+    h.get_by_label("Chemins locaux").click();
+    h.run();
+    assert!(h.query_by_label("Exécutable").is_some());
+    assert!(
+        h.get_by_role_and_label(egui::Role::Window, "Paramètres")
+            .query_by_role(egui::Role::TextInput)
+            .is_none()
+    );
+    h.key_combination(&[egui::Key::F1]);
+    h.run();
+    assert!(h.query_by_label("Ctrl+W").is_some());
+}
+
+#[test]
 fn empty_workspace_exposes_connection_and_workspace_controls() {
     let mut app = KortexApp::for_test();
     let mut initialized = false;

@@ -1,6 +1,7 @@
 use crate::{
     columns,
     grid::{self, DataView},
+    local_paths,
     mcd::{self, DiagramView},
     shortcuts::{self, Command},
     sql::{self, SqlView},
@@ -171,9 +172,18 @@ impl ConnectionForm {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    General,
+    Shortcuts,
+    LocalPaths,
+}
+
 pub struct KortexApp {
     prefs: Preferences,
     path: Option<PathBuf>,
+    config_location: Option<PathBuf>,
+    local_paths: Vec<local_paths::PathEntry>,
     tree: Option<egui_tiles::Tree<Pane>>,
     connections: BTreeMap<String, Connection>,
     documents: Vec<Document>,
@@ -187,7 +197,7 @@ pub struct KortexApp {
     search: String,
     form: Option<ConnectionForm>,
     settings: bool,
-    settings_shortcuts: bool,
+    settings_tab: SettingsTab,
     shortcut_search: String,
     revealed_tab: Option<u64>,
     last_save: Instant,
@@ -201,7 +211,9 @@ pub struct KortexApp {
 impl KortexApp {
     pub fn new(ctx: &egui::Context) -> Self {
         theme::apply(ctx);
-        let path = storage::config_path().ok();
+        Self::with_config(ctx, storage::config_path().ok())
+    }
+    fn with_config(ctx: &egui::Context, path: Option<PathBuf>) -> Self {
         let loaded = path
             .as_ref()
             .map(|p| storage::load(p))
@@ -212,6 +224,7 @@ impl KortexApp {
         };
         theme::set_appearance(ctx, prefs.appearance);
         let mut app = Self::with_preferences(prefs);
+        app.config_location = path.clone();
         // A corrupt or newer configuration must never be overwritten by defaults.
         if error.is_none() {
             app.path = path;
@@ -247,6 +260,8 @@ impl KortexApp {
         Self {
             prefs,
             path: None,
+            config_location: None,
+            local_paths: vec![],
             tree: Some(tree),
             connections: BTreeMap::new(),
             documents: vec![],
@@ -260,7 +275,7 @@ impl KortexApp {
             search: String::new(),
             form: None,
             settings: false,
-            settings_shortcuts: false,
+            settings_tab: SettingsTab::General,
             shortcut_search: String::new(),
             revealed_tab: None,
             last_save: Instant::now(),
@@ -853,7 +868,7 @@ impl KortexApp {
         self.poll(&ctx);
         if shortcuts::consume(&ctx, Command::Help) {
             self.settings = true;
-            self.settings_shortcuts = true;
+            self.settings_tab = SettingsTab::Shortcuts;
         }
         if shortcuts::consume(&ctx, Command::Close)
             && let Some(id) = self.active
@@ -900,6 +915,12 @@ impl KortexApp {
                     self.open_sqlite_path(path);
                 }
                 if ui.button("Paramètres").clicked() {
+                    if self.settings_tab == SettingsTab::LocalPaths {
+                        self.local_paths = local_paths::collect(
+                            self.config_location.as_deref(),
+                            &self.prefs.profiles,
+                        );
+                    }
                     self.settings = true;
                 }
                 if ui.button("Réinitialiser les panneaux").clicked() {
@@ -1384,13 +1405,33 @@ impl KortexApp {
             .default_size([580.0, 620.0])
             .open(&mut self.settings)
             .show(ctx, |ui| {
+                let previous_tab = self.settings_tab;
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings_shortcuts, false, "Général");
-                    ui.selectable_value(&mut self.settings_shortcuts, true, "Raccourcis clavier");
+                    ui.selectable_value(&mut self.settings_tab, SettingsTab::General, "Général");
+                    ui.selectable_value(
+                        &mut self.settings_tab,
+                        SettingsTab::Shortcuts,
+                        "Raccourcis clavier",
+                    );
+                    ui.selectable_value(
+                        &mut self.settings_tab,
+                        SettingsTab::LocalPaths,
+                        "Chemins locaux",
+                    );
                 });
                 ui.separator();
-                if self.settings_shortcuts {
+                if self.settings_tab == SettingsTab::LocalPaths
+                    && previous_tab != SettingsTab::LocalPaths
+                {
+                    self.local_paths =
+                        local_paths::collect(self.config_location.as_deref(), &self.prefs.profiles);
+                }
+                if self.settings_tab == SettingsTab::Shortcuts {
                     shortcuts::catalogue(ui, &mut self.shortcut_search);
+                    return;
+                }
+                if self.settings_tab == SettingsTab::LocalPaths {
+                    local_paths::show(ui, &self.local_paths);
                     return;
                 }
                 ui.label("Actualisation PostgreSQL");
@@ -1602,6 +1643,37 @@ fn default_layout() -> egui_tiles::Tree<Pane> {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn invalid_configuration_keeps_its_visible_path_and_disables_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        for data in [b"invalid JSON".as_slice(), br#"{"version":99}"#] {
+            std::fs::write(&path, data).unwrap();
+            let mut app = KortexApp::with_config(&egui::Context::default(), Some(path.clone()));
+            assert_eq!(app.config_location.as_ref(), Some(&path));
+            assert!(app.path.is_none());
+            app.save();
+            assert_eq!(std::fs::read(&path).unwrap(), data);
+        }
+    }
+
+    #[test]
+    fn configured_location_and_preferences_survive_path_inspection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.json");
+        let prefs = Preferences {
+            data_refresh_secs: 7.0,
+            ..Preferences::default()
+        };
+        storage::save(&path, &prefs).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let app = KortexApp::with_config(&egui::Context::default(), Some(path.clone()));
+        let _ = local_paths::collect(app.config_location.as_deref(), &app.prefs.profiles);
+        assert_eq!(app.path.as_ref(), Some(&path));
+        assert_eq!(app.prefs.data_refresh_secs, 7.0);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
 
     #[test]
     fn fullscreen_escape_respects_text_focus_before_egui_clears_it() {

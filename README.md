@@ -6,6 +6,8 @@ Application desktop locale en Rust + egui pour explorer PostgreSQL et les fichie
 
 Windows x64, avec un pilote graphique compatible DirectX 12 ou Vulkan. L’application se lance sans serveur web ni compte Kortex.
 
+Pour installer l’application, ouvrir **dist/setup.exe**. L’assistant sombre Kortex propose une installation pour l’utilisateur courant (par défaut, `%LOCALAPPDATA%\Programs\Kortex Supervisor`) ou pour tous les utilisateurs (`%ProgramFiles%\Kortex Supervisor`, droits administrateur). Le dossier reste sélectionnable et le raccourci du bureau est proposé par défaut. Les préférences et bases existantes sont conservées lors des mises à jour et de la désinstallation.
+
 Pour utiliser la livraison portable, extraire entièrement `dist/Kortex-Supervisor-windows-x64.zip` puis ouvrir **kortex-supervisor.exe**. Garder les DLL fournies à côté de l’exécutable. Rust et Visual Studio ne sont nécessaires que pour compiler le projet.
 
 Pour lancer depuis les sources :
@@ -17,6 +19,16 @@ cargo run -p kortex-supervisor -- 'C:\chemin\base.db'
 ```
 
 Le paquet portable se construit avec `./scripts/Build-Release.ps1`. L’exécutable et les documents sont déposés dans `dist/Kortex-Supervisor/` et dans une archive ZIP. La compilation utilise Rust 1.99.1, fixé par `rust-toolchain.toml`, et des Build Tools Visual Studio stables avec les composants C++/SDK Windows.
+
+Pour produire aussi `dist/setup.exe` et ses empreintes SHA-256, utiliser PowerShell 7.2+ :
+
+```powershell
+./scripts/Get-InnoSetup.ps1              # compilateur 7.1.1 officiel, vérifié, portable dans .test-data/tools
+./scripts/Build-Release.ps1 -Installer   # option -IsccPath pour un autre emplacement du même compilateur
+./scripts/Test-Package.ps1              # version, fichiers, DLL et empreintes ZIP/setup
+```
+
+Le manifeste livré décrit la version et les empreintes des fichiers communs au ZIP et à l’installateur. Aucune installation de Rust ou d’Inno Setup n’est nécessaire pour utiliser l’application.
 
 ## Fonctions
 
@@ -41,6 +53,8 @@ PostgreSQL : données de l’onglet actif contrôlées chaque seconde ; catalogu
 SQLite : changements externes actualisés manuellement ; les écritures de Kortex déclenchent une mise à jour des vues. Le fichier doit déjà exister ; Kortex ne crée pas silencieusement de fichier vide.
 
 Les préférences sont enregistrées dans le dossier de configuration utilisateur Windows (`%APPDATA%\Kortex\Kortex Supervisor\config\workspace.json`, chemin déterminé par `directories`). `KORTEX_CONFIG_DIR` permet de choisir un dossier isolé ou portable. Les mots de passe mémorisés utilisent le Gestionnaire d’informations d’identification Windows. Les données consultées, résultats SQL et brouillons ne sont pas conservés dans cette configuration.
+
+**Paramètres → Chemins locaux** affiche les emplacements réellement utilisés : installation, configuration, fichiers SQLite et leurs fichiers auxiliaires présents, ainsi que les certificats CA référencés. Les chemins se sélectionnent et se copient ; cet onglet ne permet pas de les modifier.
 
 ## Développement et tests
 

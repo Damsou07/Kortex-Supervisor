@@ -1,5 +1,15 @@
 # Utilisation
 
+## Installation et chemins locaux
+
+Ouvrir `setup.exe`, choisir **Utilisateur courant** (sans élévation) ou **Tous les utilisateurs** (avec droits administrateur), puis confirmer ou modifier le dossier proposé. Le raccourci du bureau est coché par défaut ; celui du menu Démarrer est créé automatiquement. Le lancement à la fin reste facultatif, décoché par défaut. Pour une mise à jour dans le même mode, relancer le setup : il reprend le dossier d’installation précédent.
+
+Le ZIP portable reste utilisable en l’extrayant entièrement, DLL comprises. Installer ou désinstaller Kortex ne déplace ni ne supprime les préférences, les bases SQLite ou les secrets mémorisés. Chaque compte Windows conserve ses propres préférences, même avec une installation commune.
+
+Dans **Paramètres → Chemins locaux**, consulter les chemins de l’exécutable, de son dossier, de la configuration et des fichiers locaux référencés par les profils : bases SQLite, fichiers `-wal`/`-shm` présents et certificats CA PostgreSQL. Un fichier absent reste indiqué ; la consultation ne le crée pas. La liste est actualisée à l’ouverture de l’onglet ou des paramètres. Sélectionner le texte et le copier avec Ctrl+C ; aucun chemin ne peut être modifié ici.
+
+Le chemin de configuration respecte `KORTEX_CONFIG_DIR`. Il reste visible si le fichier est invalide, sans autoriser son écrasement. Les mots de passe sont conservés dans le coffre Windows ; résultats SQL, brouillons et activité restent en mémoire.
+
 ## Connexions et navigation
 
 Utiliser **Nouvelle connexion** pour PostgreSQL, ou **Ouvrir un fichier SQLite** pour un fichier `.db`, `.sqlite` ou `.sqlite3`. Tester un serveur distant avec TLS ; pour une autorité privée, sélectionner son certificat PEM. Les tunnels SSH sont créés extérieurement, puis utilisés comme une connexion locale.
@@ -15,6 +25,8 @@ Déplacer les onglets de panneaux EXPLORATEUR, ESPACE DE TRAVAIL, INSPECTEUR et 
 Le titre d’un onglet et sa croix appartiennent au même cadre. Le point jaune indique un brouillon, même lorsque le titre est tronqué. Ctrl+Tab et Ctrl+Maj+Tab changent d’onglet ; Ctrl+W ferme l’onglet actif avec les protections habituelles des brouillons et sessions SQL.
 
 ## Tableur
+
+Les boutons **Précédent** et **Suivant** restent dans un pied fixe, indépendant du défilement du tableau. Ils se répartissent sur plusieurs lignes dans un panneau étroit. Si les filtres ou l’éditeur occupent trop de place, leurs contrôles défilent séparément. Les boutons sont désactivés lorsqu’il n’existe pas de page correspondante, pendant un chargement ou lorsqu’un brouillon est présent.
 
 Les en-têtes affichent le nom et le type à droite. Les types connus sont raccourcis pour l’affichage (`varchar(255)`, `timestamptz`) ; l’infobulle conserve le type déclaré complet. **Légende** explique les couleurs par famille : nombres bleus, textes verts, booléens violets, dates orange, UUID turquoise, JSON jaune, binaires bruns et autres types gris. Le même code est utilisé dans le MCD et l’inspecteur.
 
