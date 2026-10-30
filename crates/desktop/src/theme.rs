@@ -187,6 +187,7 @@ pub fn apply(ctx: &egui::Context) {
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         style.spacing.item_spacing = egui::vec2(8.0, 7.0);
         style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.scroll.bar_width = 4.0;
     });
 }
 pub fn heading(text: &str) -> RichText {

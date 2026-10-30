@@ -951,7 +951,8 @@ pub fn show(
             rect.left_bottom() + egui::vec2(9.0, -17.0) * view.zoom,
             Align2::LEFT_TOP,
             format!(
-                "{} index · {} contraintes",
+                "{} variables · {} index · {} contraintes",
+                table.columns.len(),
                 table.indexes.len(),
                 table.constraints.len()
             ),
