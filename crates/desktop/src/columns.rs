@@ -437,124 +437,126 @@ const LEGEND_FAMILIES: [(&str, TypeFamily, &str); 8] = [
 ];
 
 pub fn legend(ui: &mut Ui) {
-    ui.menu_button("Légende", |ui| {
-        // Establish the popup width before nested frames and scrolling can
-        // reduce the available width to the remaining space in a chip row.
-        ui.set_width(360.0);
-        let mut appearance = theme::appearance(ui.ctx());
-        ui.horizontal(|ui| {
-            for (style, label) in [
-                (LegendStyle::Compact, "Compacte"),
-                (LegendStyle::Detailed, "Détaillée"),
-                (LegendStyle::Cards, "Cartes"),
-            ] {
-                ui.selectable_value(&mut appearance.legend_style, style, label);
-            }
-        });
-        egui::ComboBox::from_label("Palette")
-            .selected_text(match appearance.legend_palette {
-                LegendPalette::FollowDiagram => "Suivre le MCD",
-                LegendPalette::Neutral => "Neutre",
-                LegendPalette::HighContrast => "Contraste élevé",
-            })
-            .show_ui(ui, |ui| {
-                for (palette, label) in [
-                    (LegendPalette::FollowDiagram, "Suivre le MCD"),
-                    (LegendPalette::Neutral, "Neutre"),
-                    (LegendPalette::HighContrast, "Contraste élevé"),
+    egui::containers::menu::MenuButton::new("Légende")
+        .config(
+            egui::containers::menu::MenuConfig::new()
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+        )
+        .ui(ui, |ui| {
+            // Establish the popup width before nested frames and scrolling can
+            // reduce the available width to the remaining space in a chip row.
+            ui.set_width(360.0);
+            let mut appearance = theme::appearance(ui.ctx());
+            ui.horizontal(|ui| {
+                for (style, label) in [
+                    (LegendStyle::Compact, "Compacte"),
+                    (LegendStyle::Detailed, "Détaillée"),
+                    (LegendStyle::Cards, "Cartes"),
                 ] {
-                    ui.selectable_value(&mut appearance.legend_palette, palette, label);
+                    ui.selectable_value(&mut appearance.legend_style, style, label);
                 }
             });
-        theme::set_appearance(ui.ctx(), appearance);
-        ui.separator();
-        let colors = legend_colors(appearance);
-        egui::Frame::new()
-            .fill(colors.surface)
-            .stroke(Stroke::new(1.0, colors.border))
-            .corner_radius(7)
-            .inner_margin(8)
-            .show(ui, |ui| {
-                ui.visuals_mut().override_text_color = Some(colors.text);
-                ui.set_max_width(360.0);
-                let content = |ui: &mut Ui| {
-                    match appearance.legend_style {
-                        LegendStyle::Compact => {
-                            ui.horizontal_wrapped(|ui| {
-                                for (label, family, _) in LEGEND_FAMILIES {
-                                    // A chip allocates its full text width;
-                                    // only the row can wrap, never its text.
-                                    ui.add(
-                                        egui::Button::new(
-                                            egui::RichText::new(format!("● {label}"))
-                                                .color(family.color()),
-                                        )
-                                        .sense(Sense::hover())
-                                        .fill(colors.card)
-                                        .stroke(Stroke::new(1.0, colors.border))
-                                        .corner_radius(7)
-                                        .wrap_mode(egui::TextWrapMode::Extend),
-                                    );
-                                }
-                            });
-                        }
-                        LegendStyle::Detailed => {
-                            for (label, family, _) in LEGEND_FAMILIES {
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(family.color(), "●");
-                                    ui.label(label);
+            ui.label("Palette");
+            // Keep choices in the same popup: a ComboBox would replace the
+            // legend's memory-backed popup when opening its own options.
+            for (palette, label) in [
+                (LegendPalette::FollowDiagram, "Suivre le MCD"),
+                (LegendPalette::Neutral, "Neutre"),
+                (LegendPalette::HighContrast, "Contraste élevé"),
+            ] {
+                ui.radio_value(&mut appearance.legend_palette, palette, label);
+            }
+            theme::set_appearance(ui.ctx(), appearance);
+            ui.separator();
+            let colors = legend_colors(appearance);
+            egui::Frame::new()
+                .fill(colors.surface)
+                .stroke(Stroke::new(1.0, colors.border))
+                .corner_radius(7)
+                .inner_margin(8)
+                .show(ui, |ui| {
+                    ui.visuals_mut().override_text_color = Some(colors.text);
+                    ui.set_max_width(360.0);
+                    let content = |ui: &mut Ui| {
+                        match appearance.legend_style {
+                            LegendStyle::Compact => {
+                                ui.horizontal_wrapped(|ui| {
+                                    for (label, family, _) in LEGEND_FAMILIES {
+                                        // A chip allocates its full text width;
+                                        // only the row can wrap, never its text.
+                                        ui.add(
+                                            egui::Button::new(
+                                                egui::RichText::new(format!("● {label}"))
+                                                    .color(family.color()),
+                                            )
+                                            .sense(Sense::hover())
+                                            .fill(colors.card)
+                                            .stroke(Stroke::new(1.0, colors.border))
+                                            .corner_radius(7)
+                                            .wrap_mode(egui::TextWrapMode::Extend),
+                                        );
+                                    }
                                 });
                             }
-                        }
-                        LegendStyle::Cards => {
-                            ui.set_min_width(310.0);
-                            for (label, family, examples) in LEGEND_FAMILIES {
-                                egui::Frame::new()
-                                    .fill(colors.card)
-                                    .stroke(Stroke::new(1.0, colors.border))
-                                    .corner_radius(6)
-                                    .inner_margin(8)
-                                    .show(ui, |ui| {
-                                        ui.set_min_width(290.0);
-                                        ui.colored_label(
-                                            family.color(),
-                                            egui::RichText::new(format!("● {label}")).strong(),
-                                        );
-                                        ui.colored_label(
-                                            colors.muted,
-                                            egui::RichText::new(examples).monospace().small(),
-                                        );
+                            LegendStyle::Detailed => {
+                                for (label, family, _) in LEGEND_FAMILIES {
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(family.color(), "●");
+                                        ui.label(label);
                                     });
+                                }
+                            }
+                            LegendStyle::Cards => {
+                                ui.set_min_width(310.0);
+                                for (label, family, examples) in LEGEND_FAMILIES {
+                                    egui::Frame::new()
+                                        .fill(colors.card)
+                                        .stroke(Stroke::new(1.0, colors.border))
+                                        .corner_radius(6)
+                                        .inner_margin(8)
+                                        .show(ui, |ui| {
+                                            ui.set_min_width(290.0);
+                                            ui.colored_label(
+                                                family.color(),
+                                                egui::RichText::new(format!("● {label}")).strong(),
+                                            );
+                                            ui.colored_label(
+                                                colors.muted,
+                                                egui::RichText::new(examples).monospace().small(),
+                                            );
+                                        });
+                                }
                             }
                         }
+                        ui.separator();
+                        for (role, label) in [
+                            (ColumnRole::Primary, "Clé primaire"),
+                            (ColumnRole::Foreign, "Clé étrangère"),
+                            (
+                                ColumnRole::Unique,
+                                "Membre d’une clé unique, éventuellement composite",
+                            ),
+                        ] {
+                            ui.horizontal(|ui| {
+                                let (r, _) =
+                                    ui.allocate_exact_size(egui::vec2(34.0, 16.0), Sense::hover());
+                                paint_badge(ui.painter(), r.min, role, 1.0);
+                                ui.label(label);
+                            });
+                        }
+                    };
+                    if appearance.legend_style == LegendStyle::Cards {
+                        egui::ScrollArea::vertical()
+                            .id_salt("legend_content")
+                            .max_height(
+                                (ui.ctx().viewport_rect().height() - 240.0).clamp(120.0, 440.0),
+                            )
+                            .show(ui, content);
+                    } else {
+                        content(ui);
                     }
-                    ui.separator();
-                    for (role, label) in [
-                        (ColumnRole::Primary, "Clé primaire"),
-                        (ColumnRole::Foreign, "Clé étrangère"),
-                        (
-                            ColumnRole::Unique,
-                            "Membre d’une clé unique, éventuellement composite",
-                        ),
-                    ] {
-                        ui.horizontal(|ui| {
-                            let (r, _) =
-                                ui.allocate_exact_size(egui::vec2(34.0, 16.0), Sense::hover());
-                            paint_badge(ui.painter(), r.min, role, 1.0);
-                            ui.label(label);
-                        });
-                    }
-                };
-                if appearance.legend_style == LegendStyle::Cards {
-                    egui::ScrollArea::vertical()
-                        .id_salt("legend_content")
-                        .max_height(440.0)
-                        .show(ui, content);
-                } else {
-                    content(ui);
-                }
-            });
-    });
+                });
+        });
 }
 
 pub fn table_details(ui: &mut Ui, table: &Table) {

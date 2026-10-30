@@ -43,6 +43,7 @@ fn dense_labels_never_overlap_and_keep_their_order() {
     let placed = place_labels(
         &labels,
         Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)),
+        &[],
     );
     assert_eq!(placed.len(), labels.len());
     for (i, a) in placed.iter().enumerate() {
@@ -54,10 +55,36 @@ fn dense_labels_never_overlap_and_keep_their_order() {
 }
 
 #[test]
+fn overlapping_labels_are_hidden_without_displacing_any_label() {
+    let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(40.0, 20.0));
+    let placed = place_labels(
+        &[rect, rect],
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0)),
+        &[],
+    );
+    assert_eq!(placed[0], rect);
+    assert!(
+        !placed[1].is_finite(),
+        "a colliding label must be hidden, not moved"
+    );
+}
+
+#[test]
+fn labels_outside_the_canvas_are_hidden_instead_of_clamped() {
+    let rect = Rect::from_min_size(pos2(-10.0, 20.0), vec2(40.0, 20.0));
+    let placed = place_labels(
+        &[rect],
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0)),
+        &[],
+    );
+    assert!(!placed[0].is_finite());
+}
+
+#[test]
 fn saturated_labels_are_reported_instead_of_overlapping() {
     let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(90.0, 50.0));
-    let labels = vec![Rect::from_min_size(pos2(0.0, 0.0), vec2(40.0, 12.0)); 20];
-    let placed = place_labels(&labels, canvas);
+    let labels = vec![Rect::from_min_size(pos2(4.0, 4.0), vec2(40.0, 12.0)); 20];
+    let placed = place_labels(&labels, canvas, &[]);
     assert!(placed.iter().any(|rect| !rect.is_finite()));
     let visible: Vec<_> = placed.into_iter().filter(Rect::is_finite).collect();
     for (i, rect) in visible.iter().enumerate() {
@@ -71,38 +98,69 @@ fn saturated_labels_are_reported_instead_of_overlapping() {
 #[test]
 fn full_width_labels_report_overflow_when_the_canvas_is_full() {
     let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(90.0, 20.0));
-    let labels = vec![Rect::from_min_size(pos2(0.0, 0.0), vec2(90.0, 12.0)); 2];
-    let placed = place_labels(&labels, canvas);
+    let labels = vec![Rect::from_min_size(pos2(2.0, 2.0), vec2(86.0, 12.0)); 2];
+    let placed = place_labels(&labels, canvas, &[]);
     assert!(canvas.contains_rect(placed[0]));
     assert!(!placed[1].is_finite());
 }
 
 #[test]
-fn overflow_description_identifies_direction_columns_and_cardinality() {
-    let source = Table {
-        id: ObjectId::new("sales", "orders"),
-        ..Table::default()
-    };
-    let target = Table {
-        id: ObjectId::new("sales", "customers"),
-        ..Table::default()
-    };
-    let fk = ForeignKey {
-        name: "fk_customer".into(),
-        columns: vec!["customer_id".into()],
-        target_columns: vec!["id".into()],
-        ..ForeignKey::default()
-    };
-    let text = super::overflow_description(&source, &target, &fk, "0..N", false, true);
-    for part in [
-        "fk_customer",
-        "orders",
-        "customer_id",
-        "customers",
-        "id",
-        "0..N",
-        "entrant",
+fn badges_stay_outside_their_table_and_preserve_fixed_dimensions() {
+    use kortex_domain::AnchorSide;
+    let table = Rect::from_min_max(pos2(100.0, 100.0), pos2(420.0, 300.0));
+    for (side, endpoint) in [
+        (AnchorSide::Left, pos2(100.0, 200.0)),
+        (AnchorSide::Right, pos2(420.0, 200.0)),
+        (AnchorSide::Top, pos2(250.0, 100.0)),
+        (AnchorSide::Bottom, pos2(250.0, 300.0)),
     ] {
-        assert!(text.contains(part), "missing {part} in {text}");
+        for source in [true, false] {
+            let badge = super::badge_rect(endpoint, side, source);
+            assert_eq!(badge.size(), vec2(40.0, 20.0));
+            assert!(!badge.intersects(table));
+        }
+    }
+}
+
+#[test]
+fn badges_covering_tables_are_hidden_and_reappear_when_clear() {
+    let badge = Rect::from_min_size(pos2(20.0, 20.0), vec2(40.0, 20.0));
+    let canvas = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
+    assert!(!place_labels(&[badge], canvas, &[badge])[0].is_finite());
+    assert_eq!(place_labels(&[badge], canvas, &[])[0], badge);
+}
+
+#[test]
+fn generated_elbows_do_not_change_manual_waypoint_insertion_order() {
+    let points = [
+        pos2(0.0, 0.0),
+        pos2(24.0, 0.0),
+        pos2(24.0, 30.0),
+        pos2(50.0, 30.0),
+        pos2(80.0, 30.0),
+        pos2(100.0, 30.0),
+        pos2(100.0, 50.0),
+    ];
+    let manual = [points[3], points[4]];
+    assert_eq!(super::waypoint_insertion_index(&points, &manual, 1), 0);
+    assert_eq!(super::waypoint_insertion_index(&points, &manual, 3), 1);
+    assert_eq!(super::waypoint_insertion_index(&points, &manual, 5), 2);
+}
+
+#[test]
+fn remote_names_never_overlap_the_fixed_badge_on_any_side() {
+    use kortex_domain::AnchorSide;
+    for side in [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ] {
+        for source in [true, false] {
+            let endpoint = pos2(400.0, 400.0);
+            let badge = super::badge_rect(endpoint, side, source);
+            let name = super::endpoint_label_rect(endpoint, side, !source, vec2(180.0, 16.0));
+            assert!(!badge.intersects(name));
+        }
     }
 }

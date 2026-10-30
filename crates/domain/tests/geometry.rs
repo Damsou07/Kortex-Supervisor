@@ -282,3 +282,439 @@ fn crossing_paths_receive_a_bridge_without_merging_relations() {
             .contains(&Point { x: 760.0, y: 148.0 })
     );
 }
+
+fn anchor_rect(x: f32, y: f32) -> NodeRect {
+    NodeRect {
+        origin: Point { x, y },
+        size: Point { x: 320.0, y: 160.0 },
+    }
+}
+
+fn four_side_input() -> LayoutInput {
+    LayoutInput {
+        nodes: vec![
+            LayoutNode {
+                id: "a".into(),
+                rect: anchor_rect(0.0, 0.0),
+            },
+            LayoutNode {
+                id: "b".into(),
+                rect: anchor_rect(640.0, 320.0),
+            },
+            LayoutNode {
+                id: "obstacle".into(),
+                rect: anchor_rect(320.0, 160.0),
+            },
+        ],
+        edges: vec![LayoutEdge {
+            id: "ab".into(),
+            source: "a".into(),
+            target: "b".into(),
+            source_y: 48.0,
+            target_y: 48.0,
+        }],
+        ..LayoutInput::default()
+    }
+}
+
+fn assert_orthogonal_clear(points: &[Point], obstacles: &[NodeRect]) {
+    assert!(points.len() >= 2);
+    for pair in points.windows(2) {
+        assert!(
+            pair[0].x == pair[1].x || pair[0].y == pair[1].y,
+            "diagonal: {pair:?}"
+        );
+        for rect in obstacles {
+            assert!(
+                !rect.segment_crosses_interior(pair[0], pair[1]),
+                "{pair:?} crosses {rect:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn four_side_projection_resolves_local_offsets_and_stable_corner_ties() {
+    let rect = anchor_rect(100.0, 200.0);
+    for (pointer, expected) in [
+        (
+            Point { x: 90.0, y: 250.0 },
+            TableAnchor {
+                side: AnchorSide::Left,
+                offset: 50.0,
+            },
+        ),
+        (
+            Point { x: 430.0, y: 250.0 },
+            TableAnchor {
+                side: AnchorSide::Right,
+                offset: 50.0,
+            },
+        ),
+        (
+            Point { x: 250.0, y: 190.0 },
+            TableAnchor {
+                side: AnchorSide::Top,
+                offset: 150.0,
+            },
+        ),
+        (
+            Point { x: 250.0, y: 370.0 },
+            TableAnchor {
+                side: AnchorSide::Bottom,
+                offset: 150.0,
+            },
+        ),
+    ] {
+        assert_eq!(project_table_anchor(rect, pointer, None), expected);
+        let point = resolve_table_anchor(rect, expected);
+        let moved = resolve_table_anchor(anchor_rect(120.0, 230.0), expected);
+        assert_eq!(
+            moved,
+            Point {
+                x: point.x + 20.0,
+                y: point.y + 30.0
+            }
+        );
+    }
+    let corner = Point { x: 100.0, y: 200.0 };
+    assert_eq!(
+        project_table_anchor(rect, corner, Some(AnchorSide::Top)).side,
+        AnchorSide::Top
+    );
+    assert_eq!(
+        project_table_anchor(rect, corner, Some(AnchorSide::Left)).side,
+        AnchorSide::Left
+    );
+    let anchor = TableAnchor {
+        side: AnchorSide::Left,
+        offset: 200.0,
+    };
+    assert_eq!(resolve_table_anchor(rect, anchor).y, rect.bottom());
+    assert_eq!(
+        anchor.offset, 200.0,
+        "resolving a smaller table must not rewrite placement"
+    );
+}
+
+#[test]
+fn manual_anchors_route_outward_on_all_four_sides_without_crossing_tables() {
+    for source_side in [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ] {
+        for target_side in [
+            AnchorSide::Left,
+            AnchorSide::Right,
+            AnchorSide::Top,
+            AnchorSide::Bottom,
+        ] {
+            let mut input = four_side_input();
+            let source = TableAnchor {
+                side: source_side,
+                offset: 80.0,
+            };
+            let target = TableAnchor {
+                side: target_side,
+                offset: 80.0,
+            };
+            input.manual.insert(
+                "ab".into(),
+                Route {
+                    source_anchor: Some(source),
+                    target_anchor: Some(target),
+                    ..Route::default()
+                },
+            );
+            let output = route_diagram(&input);
+            let points = &output.edges["ab"].points;
+            assert_eq!(points[0], resolve_table_anchor(output.rects["a"], source));
+            assert_eq!(
+                *points.last().unwrap(),
+                resolve_table_anchor(output.rects["b"], target)
+            );
+            let departure = Point {
+                x: points[1].x - points[0].x,
+                y: points[1].y - points[0].y,
+            };
+            let last = points.len() - 1;
+            let arrival = Point {
+                x: points[last - 1].x - points[last].x,
+                y: points[last - 1].y - points[last].y,
+            };
+            for (delta, normal) in [
+                (departure, source_side.normal()),
+                (arrival, target_side.normal()),
+            ] {
+                assert!(delta.x * normal.x + delta.y * normal.y > 0.0);
+            }
+            assert_orthogonal_clear(
+                points,
+                &input.nodes.iter().map(|node| node.rect).collect::<Vec<_>>(),
+            );
+        }
+    }
+}
+
+#[test]
+fn endpoint_reconnection_preserves_waypoints_and_avoids_source_and_target_interiors() {
+    let input = four_side_input();
+    let source_rect = input.nodes[0].rect;
+    let target_rect = input.nodes[1].rect;
+    let original = [
+        Point { x: 320.0, y: 48.0 },
+        Point { x: 400.0, y: 48.0 },
+        Point { x: 1000.0, y: 48.0 },
+        Point {
+            x: 1000.0,
+            y: 368.0,
+        },
+        Point { x: 960.0, y: 368.0 },
+    ];
+    let source = TableAnchor {
+        side: AnchorSide::Top,
+        offset: 80.0,
+    };
+    let target = TableAnchor {
+        side: AnchorSide::Bottom,
+        offset: 100.0,
+    };
+    let obstacles: Vec<_> = input.nodes.iter().map(|node| node.rect).collect();
+    let connected = reconnect_route_endpoints(
+        &original,
+        (source_rect, source),
+        (target_rect, target),
+        &obstacles,
+    );
+    assert_eq!(connected[0], resolve_table_anchor(source_rect, source));
+    assert_eq!(
+        *connected.last().unwrap(),
+        resolve_table_anchor(target_rect, target)
+    );
+    for point in &original[1..original.len() - 1] {
+        assert!(connected.contains(point), "lost waypoint {point:?}");
+    }
+    assert_orthogonal_clear(&connected, &obstacles);
+}
+
+#[test]
+fn coincident_manual_self_anchors_keep_a_visible_exterior_loop() {
+    for side in [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ] {
+        let rect = anchor_rect(100.0, 100.0);
+        let anchor = TableAnchor { side, offset: 80.0 };
+        let mut input = four_side_input();
+        input.nodes = vec![LayoutNode {
+            id: "a".into(),
+            rect,
+        }];
+        input.edges[0].target = "a".into();
+        input.manual.insert(
+            "ab".into(),
+            Route {
+                source_anchor: Some(anchor),
+                target_anchor: Some(anchor),
+                ..Route::default()
+            },
+        );
+        let result = route_diagram(&input);
+        let points = &result.edges["ab"].points;
+        assert_eq!(points.first(), points.last());
+        assert!(points.len() >= 5, "collapsed self loop: {points:?}");
+        assert_orthogonal_clear(points, &[rect]);
+    }
+}
+
+#[test]
+fn tight_obstacle_gap_keeps_live_and_final_connectors_outside_tables() {
+    let mut input = four_side_input();
+    input.nodes[2].rect = anchor_rect(336.0, 0.0);
+    let source = TableAnchor {
+        side: AnchorSide::Right,
+        offset: 80.0,
+    };
+    let target = TableAnchor {
+        side: AnchorSide::Left,
+        offset: 80.0,
+    };
+    input.manual.insert(
+        "ab".into(),
+        Route {
+            source_anchor: Some(source),
+            target_anchor: Some(target),
+            ..Route::default()
+        },
+    );
+    let obstacles: Vec<_> = input.nodes.iter().map(|node| node.rect).collect();
+    let live = reconnect_route_endpoints(
+        &[],
+        (input.nodes[0].rect, source),
+        (input.nodes[1].rect, target),
+        &obstacles,
+    );
+    assert_orthogonal_clear(&live, &obstacles);
+    assert_orthogonal_clear(&route_diagram(&input).edges["ab"].points, &obstacles);
+}
+
+#[test]
+fn coincident_self_loop_remains_visible_in_a_narrow_obstacle_gap() {
+    let mut input = four_side_input();
+    input.nodes[2].rect = anchor_rect(336.0, 0.0);
+    input.edges[0].target = "a".into();
+    let anchor = TableAnchor {
+        side: AnchorSide::Right,
+        offset: 80.0,
+    };
+    input.manual.insert(
+        "ab".into(),
+        Route {
+            source_anchor: Some(anchor),
+            target_anchor: Some(anchor),
+            ..Route::default()
+        },
+    );
+    let obstacles: Vec<_> = input.nodes.iter().map(|node| node.rect).collect();
+    let points = route_diagram(&input).edges["ab"].points.clone();
+    assert!(
+        points.len() >= 5,
+        "loop collapsed to an out-and-back: {points:?}"
+    );
+    assert!(points.iter().any(|point| point.y != points[0].y));
+    assert_orthogonal_clear(&points, &obstacles);
+}
+
+#[test]
+fn live_reconnection_finds_a_narrow_corridor_in_the_visibility_fallback() {
+    let rect = |x, y, width, height| NodeRect {
+        origin: Point { x, y },
+        size: Point {
+            x: width,
+            y: height,
+        },
+    };
+    let source = rect(20.0, 320.0, 10.0, 60.0);
+    let target = rect(380.0, 20.0, 10.0, 60.0);
+    // The left chamber can only escape between x=200 and x=208, then turn
+    // above the right wall. No one- or two-elbow connector can leave it.
+    let obstacles = [
+        source,
+        target,
+        rect(100.0, 0.0, 100.0, 300.0),
+        rect(208.0, 100.0, 112.0, 300.0),
+        rect(0.0, 200.0, 100.0, 100.0),
+        rect(0.0, 380.0, 208.0, 100.0),
+        rect(-100.0, 200.0, 100.0, 280.0),
+    ];
+    let points = reconnect_route_endpoints(
+        &[],
+        (
+            source,
+            TableAnchor {
+                side: AnchorSide::Right,
+                offset: 30.0,
+            },
+        ),
+        (
+            target,
+            TableAnchor {
+                side: AnchorSide::Left,
+                offset: 30.0,
+            },
+        ),
+        &obstacles,
+    );
+    assert_orthogonal_clear(&points, &obstacles);
+    assert!(
+        points
+            .iter()
+            .any(|point| point.x >= 200.0 && point.x <= 208.0)
+    );
+}
+
+#[test]
+fn self_links_with_different_sides_and_corner_anchors_stay_outside_the_table() {
+    for source_side in [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ] {
+        for target_side in [
+            AnchorSide::Left,
+            AnchorSide::Right,
+            AnchorSide::Top,
+            AnchorSide::Bottom,
+        ] {
+            let rect = anchor_rect(100.0, 100.0);
+            let mut input = four_side_input();
+            input.nodes = vec![LayoutNode {
+                id: "a".into(),
+                rect,
+            }];
+            input.edges[0].target = "a".into();
+            input.manual.insert(
+                "ab".into(),
+                Route {
+                    source_anchor: Some(TableAnchor {
+                        side: source_side,
+                        offset: 0.0,
+                    }),
+                    target_anchor: Some(TableAnchor {
+                        side: target_side,
+                        offset: 0.0,
+                    }),
+                    ..Route::default()
+                },
+            );
+            let result = route_diagram(&input);
+            let points = &result.edges["ab"].points;
+            assert!(points.windows(2).any(|pair| pair[0] != pair[1]));
+            assert_orthogonal_clear(points, &[rect]);
+        }
+    }
+}
+
+#[test]
+fn manual_four_side_route_keeps_user_waypoints_and_legacy_routes_keep_their_shape() {
+    let mut input = four_side_input();
+    let waypoints = vec![
+        Point { x: 400.0, y: -80.0 },
+        Point {
+            x: 1000.0,
+            y: -80.0,
+        },
+    ];
+    input.manual.insert(
+        "ab".into(),
+        Route {
+            points: waypoints.clone(),
+            source_y: Some(48.0),
+            target_y: Some(48.0),
+            ..Route::default()
+        },
+    );
+    let legacy = route_diagram(&input).edges["ab"].points.clone();
+    assert_eq!(&legacy[1..legacy.len() - 1], &waypoints);
+    input.manual.get_mut("ab").unwrap().source_anchor = Some(TableAnchor {
+        side: AnchorSide::Top,
+        offset: 80.0,
+    });
+    input.manual.get_mut("ab").unwrap().target_anchor = Some(TableAnchor {
+        side: AnchorSide::Right,
+        offset: 80.0,
+    });
+    let points = route_diagram(&input).edges["ab"].points.clone();
+    for waypoint in waypoints {
+        assert!(points.contains(&waypoint));
+    }
+    assert_orthogonal_clear(
+        &points,
+        &input.nodes.iter().map(|node| node.rect).collect::<Vec<_>>(),
+    );
+}

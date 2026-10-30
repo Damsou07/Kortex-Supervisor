@@ -50,6 +50,30 @@ pub struct Point {
     pub x: f32,
     pub y: f32,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnchorSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+impl AnchorSide {
+    /// Unit vector pointing away from the table.
+    pub fn normal(self) -> Point {
+        match self {
+            Self::Left => Point { x: -1.0, y: 0.0 },
+            Self::Right => Point { x: 1.0, y: 0.0 },
+            Self::Top => Point { x: 0.0, y: -1.0 },
+            Self::Bottom => Point { x: 0.0, y: 1.0 },
+        }
+    }
+}
+/// Distance along a table side in diagram units, independent of pan and zoom.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TableAnchor {
+    pub side: AnchorSide,
+    pub offset: f32,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Group {
     pub id: u64,
@@ -68,6 +92,10 @@ pub struct Route {
     pub source_y: Option<f32>,
     #[serde(default)]
     pub target_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_anchor: Option<TableAnchor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_anchor: Option<TableAnchor>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Diagram {

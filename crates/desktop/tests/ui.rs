@@ -22,6 +22,40 @@ fn empty_workspace_exposes_connection_and_workspace_controls() {
 }
 
 #[test]
+fn branding_and_toolbar_fit_the_minimum_window_size() {
+    let mut app = KortexApp::for_test();
+    let mut initialized = false;
+    let mut harness = Harness::builder()
+        .with_size([1000.0, 650.0])
+        .build_ui(move |ui| {
+            if !initialized {
+                kortex_supervisor::theme::apply(ui.ctx());
+                initialized = true;
+            }
+            app.render(ui);
+        });
+    harness.run();
+    let logo = harness.get_by_label("Logo Kortex Supervisor").rect();
+    assert_eq!(logo.size(), egui::vec2(64.0, 64.0));
+    for label in [
+        "KORTEX",
+        "SUPERVISOR",
+        "Nouvelle connexion",
+        "Ouvrir un fichier SQLite",
+        "Paramètres",
+        "Réinitialiser les panneaux",
+    ] {
+        let bounds = harness.get_by_label(label).rect();
+        assert!(
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1000.0, 100.0))
+                .contains_rect(bounds),
+            "header control {label} is clipped: {bounds:?}"
+        );
+        assert!(!logo.intersects(bounds), "logo overlaps {label}");
+    }
+}
+
+#[test]
 fn f1_opens_the_searchable_keyboard_catalogue() {
     let mut app = KortexApp::for_test();
     let mut initialized = false;
@@ -173,8 +207,6 @@ fn mcd_renders_keys_constraints_and_relations_without_mutating_catalog() {
     harness.get_by_label("Légende").click();
     harness.run();
     harness.get_by_label("Détaillée").click();
-    harness.run();
-    harness.get_by_label("Légende").click();
     harness.run();
     assert!(harness.query_by_label("Clé primaire").is_some());
     harness.snapshot("legend_detailed");

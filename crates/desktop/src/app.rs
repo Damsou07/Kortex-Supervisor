@@ -220,19 +220,23 @@ impl KortexApp {
                 "Configuration non chargée, sauvegarde désactivée : {error}"
             ));
         }
-        if let Ok(image) = image::load_from_memory(include_bytes!("../../../logo-Kortex.png")) {
+        app
+    }
+    pub fn for_test() -> Self {
+        Self::with_preferences(Preferences::default())
+    }
+    fn ensure_logo(&mut self, ctx: &egui::Context) {
+        if self.logo.is_none()
+            && let Ok(image) = image::load_from_memory(include_bytes!("../../../logo-Kortex.png"))
+        {
             let image = image.thumbnail(160, 160).to_rgba8();
             let size = [image.width() as usize, image.height() as usize];
-            app.logo = Some(ctx.load_texture(
+            self.logo = Some(ctx.load_texture(
                 "kortex_logo",
                 egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
                 Default::default(),
             ));
         }
-        app
-    }
-    pub fn for_test() -> Self {
-        Self::with_preferences(Preferences::default())
     }
     fn with_preferences(prefs: Preferences) -> Self {
         let tree = prefs
@@ -845,6 +849,7 @@ impl KortexApp {
     }
     pub fn render(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.ensure_logo(&ctx);
         self.poll(&ctx);
         if shortcuts::consume(&ctx, Command::Help) {
             self.settings = true;
@@ -874,7 +879,10 @@ impl KortexApp {
         egui::Panel::top("top_bar").resizable(false).show(ui, |ui| {
             ui.horizontal(|ui| {
                 if let Some(logo) = &self.logo {
-                    ui.image((logo.id(), egui::vec2(38.0, 38.0)));
+                    ui.add(
+                        egui::Image::new((logo.id(), egui::vec2(64.0, 64.0)))
+                            .alt_text("Logo Kortex Supervisor"),
+                    );
                 }
                 ui.vertical(|ui| {
                     ui.label(RichText::new("KORTEX").size(20.0).strong());
@@ -1214,12 +1222,16 @@ impl KortexApp {
     }
     fn inspector(&mut self, ui: &mut Ui) {
         let selected = self.selected.as_ref().and_then(|(conn, table)| {
-            self.connections
-                .get(conn)
-                .and_then(|c| c.catalog.tables.iter().find(|t| t.stable_id == *table))
+            self.connections.get(conn).and_then(|c| {
+                c.catalog
+                    .tables
+                    .iter()
+                    .find(|t| t.stable_id == *table)
+                    .map(|table| (&c.catalog, table))
+            })
         });
-        egui::ScrollArea::both().show(ui, |ui| {
-            if let Some(table) = selected {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if let Some((catalog, table)) = selected {
                 ui.label(theme::heading("OBJET SÉLECTIONNÉ"));
                 ui.heading(&table.id.name);
                 ui.label(&table.id.schema);
@@ -1251,6 +1263,8 @@ impl KortexApp {
                         });
                 }
                 ui.separator();
+                crate::inspector::show_relations(ui, catalog, table);
+                ui.separator();
                 ui.label(theme::heading("INDEX"));
                 for index in &table.indexes {
                     egui::CollapsingHeader::new(format!(
@@ -1276,7 +1290,7 @@ impl KortexApp {
                 }
             } else {
                 ui.label(
-                    "Sélectionnez une table pour inspecter ses colonnes, index et contraintes.",
+                    "Sélectionnez une table pour inspecter ses colonnes, relations, index et contraintes.",
                 );
             }
         });

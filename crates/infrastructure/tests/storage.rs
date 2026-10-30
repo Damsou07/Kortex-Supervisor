@@ -69,6 +69,36 @@ fn all_appearance_choices_round_trip_without_changing_existing_names() {
 }
 
 #[test]
+fn four_side_anchors_round_trip_and_legacy_routes_remain_readable() {
+    let legacy: Route = serde_json::from_str(
+        r#"{"points":[],"source_left":true,"target_right":false,"source_y":72.0,"target_y":48.0}"#,
+    )
+    .unwrap();
+    assert_eq!(legacy.source_anchor, None);
+    assert_eq!(legacy.target_anchor, None);
+    assert!(legacy.source_left);
+    assert_eq!(legacy.source_y, Some(72.0));
+    for side in [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ] {
+        let route = Route {
+            source_anchor: Some(TableAnchor { side, offset: 93.0 }),
+            target_anchor: Some(TableAnchor {
+                side,
+                offset: 104.0,
+            }),
+            ..legacy.clone()
+        };
+        let restored: Route =
+            serde_json::from_str(&serde_json::to_string(&route).unwrap()).unwrap();
+        assert_eq!(restored, route);
+    }
+}
+
+#[test]
 fn atomic_replace_round_trip_and_unknown_version_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("workspace.json");

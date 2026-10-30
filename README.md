@@ -22,13 +22,13 @@ Le paquet portable se construit avec `./scripts/Build-Release.ps1`. L’exécuta
 
 - Plusieurs profils PostgreSQL et SQLite, onglets explicitement rattachés à leur connexion.
 - PostgreSQL distant avec TLS, vérification du certificat/nom d’hôte et CA personnalisée. Le mode sans TLS est réservé à `localhost`, `127.0.0.1` et `::1`.
-- Explorateur de schémas, tables et vues ; inspecteur de colonnes, index, contraintes et relations.
+- Explorateur de schémas, tables et vues ; inspecteur de colonnes, index, contraintes et relations entrantes/sortantes, avec colonnes reliées, cardinalités et règles de suppression/mise à jour.
 - Tableur paginé : tri multiple avec Maj+clic, filtres combinables, ajout et suppression de lignes, édition par double-clic sur une cellule.
 - **Appliquer** enregistre le lot dans une transaction ; **Annuler les modifications** abandonne le brouillon. Les conflits externes empêchent l’écrasement silencieux des données.
 - Éditeur SQL à sessions indépendantes : scripts, sélection, Ctrl+Entrée, insertion des objets connus, résultats multiples et annulation côté moteur.
-- MCD : dispositions automatiques compacte et espacée, six thèmes sombres (Graphite, Bleu nuit, Obsidienne rouge, Émeraude, Améthyste et Contraste élevé), liens orthogonaux et cardinalités réparties, tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
+- MCD : dispositions automatiques compacte et espacée, six thèmes sombres (Graphite, Bleu nuit, Obsidienne rouge, Émeraude, Améthyste et Contraste élevé), liens orthogonaux et ancrages déplaçables sur les quatre côtés des tables. Les cardinalités gardent une taille fixe à l’écran et suivent les flèches ; celles qui se chevauchent sont masquées sans déplacer les autres. Tracés ajustables et réinitialisation annulable. Les colonnes restent affichées à tous les zooms ; une loupe au survol aide à les lire sous 60 %.
 - Groupes : panneau dédié, sélection rectangulaire, cadres automatiquement ajustés aux tables et fenêtres natives partageant la disposition. Le MCD complet peut aussi être ouvert maximisé ou en plein écran.
-- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD, légendes compacte, détaillée ou en cartes et badges vectoriels PK/FK/UQ séparés. La palette de légende peut suivre le MCD, rester neutre ou renforcer le contraste.
+- Types et contraintes : types raccourcis avec valeur complète en infobulle, couleurs communes au tableur/MCD, légendes compacte, détaillée ou en cartes et badges vectoriels PK/FK/UQ séparés. Le menu reste ouvert pendant les réglages ; ses trois palettes peuvent suivre le MCD, rester neutres ou renforcer le contraste.
 - Onglets avec fermeture intégrée et indicateur de brouillon ; catalogue des raccourcis et gestes souris dans **Paramètres → Raccourcis clavier** (**F1**).
 - Panneaux déplaçables par leur onglet et redimensionnables. Disposition, groupes et choix d’apparence enregistrés localement.
 

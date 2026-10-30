@@ -2,6 +2,7 @@ pub mod app;
 pub mod columns;
 mod diagram_cache;
 pub mod grid;
+mod inspector;
 pub mod mcd;
 pub mod shortcuts;
 pub mod sql;

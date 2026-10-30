@@ -53,6 +53,339 @@ impl NodeRect {
         }
     }
 }
+
+/// Resolve an anchor without changing its saved offset when a table becomes smaller.
+pub fn resolve_table_anchor(rect: NodeRect, anchor: TableAnchor) -> Point {
+    match anchor.side {
+        AnchorSide::Left | AnchorSide::Right => Point {
+            x: if anchor.side == AnchorSide::Left {
+                rect.origin.x
+            } else {
+                rect.right()
+            },
+            y: rect.origin.y + anchor.offset.clamp(0.0, rect.size.y.max(0.0)),
+        },
+        AnchorSide::Top | AnchorSide::Bottom => Point {
+            x: rect.origin.x + anchor.offset.clamp(0.0, rect.size.x.max(0.0)),
+            y: if anchor.side == AnchorSide::Top {
+                rect.origin.y
+            } else {
+                rect.bottom()
+            },
+        },
+    }
+}
+
+/// Nearest point on the complete perimeter. Keeping the previous side only on
+/// exact ties prevents corner jitter without locking a drag to that side.
+pub fn project_table_anchor(
+    rect: NodeRect,
+    pointer: Point,
+    preferred: Option<AnchorSide>,
+) -> TableAnchor {
+    [
+        AnchorSide::Left,
+        AnchorSide::Right,
+        AnchorSide::Top,
+        AnchorSide::Bottom,
+    ]
+    .into_iter()
+    .map(|side| {
+        let offset = match side {
+            AnchorSide::Left | AnchorSide::Right => {
+                (pointer.y - rect.origin.y).clamp(0.0, rect.size.y.max(0.0))
+            }
+            AnchorSide::Top | AnchorSide::Bottom => {
+                (pointer.x - rect.origin.x).clamp(0.0, rect.size.x.max(0.0))
+            }
+        };
+        let anchor = TableAnchor { side, offset };
+        let point = resolve_table_anchor(rect, anchor);
+        let distance = (point.x - pointer.x).powi(2) + (point.y - pointer.y).powi(2);
+        (anchor, distance)
+    })
+    .min_by(|(a, da), (b, db)| {
+        da.total_cmp(db)
+            .then_with(|| (preferred != Some(a.side)).cmp(&(preferred != Some(b.side))))
+    })
+    .expect("four sides")
+    .0
+}
+
+fn clear_path(points: &[Point], obstacles: &[NodeRect]) -> bool {
+    points.windows(2).all(|p| {
+        (p[0].x == p[1].x || p[0].y == p[1].y)
+            && obstacles
+                .iter()
+                .all(|rect| !rect.segment_crosses_interior(p[0], p[1]))
+    })
+}
+
+fn path_length(points: &[Point]) -> f32 {
+    points
+        .windows(2)
+        .map(|p| (p[1].x - p[0].x).abs() + (p[1].y - p[0].y).abs())
+        .sum()
+}
+
+fn consider_connector(
+    best: &mut Option<(f32, Vec<Point>)>,
+    points: Vec<Point>,
+    obstacles: &[NodeRect],
+) {
+    if clear_path(&points, obstacles) {
+        let length = path_length(&points);
+        if best.as_ref().is_none_or(|(previous, _)| length < *previous) {
+            *best = Some((length, points));
+        }
+    }
+}
+
+/// Common drags need only one or two elbows. The visibility-grid fallback is
+/// used only when surrounding tables obstruct every short connector.
+fn connect_orthogonal(start: Point, end: Point, obstacles: &[NodeRect]) -> Vec<Point> {
+    if start == end {
+        return vec![start];
+    }
+    let mut best = None;
+    consider_connector(
+        &mut best,
+        vec![
+            start,
+            Point {
+                x: end.x,
+                y: start.y,
+            },
+            end,
+        ],
+        obstacles,
+    );
+    consider_connector(
+        &mut best,
+        vec![
+            start,
+            Point {
+                x: start.x,
+                y: end.y,
+            },
+            end,
+        ],
+        obstacles,
+    );
+    if let Some((_, points)) = best {
+        return simplify_path(points);
+    }
+    let mut xs = vec![start.x, end.x];
+    let mut ys = vec![start.y, end.y];
+    for rect in obstacles {
+        xs.extend([rect.origin.x - 12.0, rect.right() + 12.0]);
+        ys.extend([rect.origin.y - 12.0, rect.bottom() + 12.0]);
+    }
+    for &x in &xs {
+        consider_connector(
+            &mut best,
+            vec![start, Point { x, y: start.y }, Point { x, y: end.y }, end],
+            obstacles,
+        );
+    }
+    for &y in &ys {
+        consider_connector(
+            &mut best,
+            vec![start, Point { x: start.x, y }, Point { x: end.x, y }, end],
+            obstacles,
+        );
+    }
+    if let Some((_, points)) = best {
+        return simplify_path(points);
+    }
+    // Preserve narrow corridors where the normal clearance on both sides
+    // would otherwise place every visibility coordinate inside an obstacle.
+    for rect in obstacles {
+        xs.extend([rect.origin.x, rect.right()]);
+        ys.extend([rect.origin.y, rect.bottom()]);
+    }
+    visibility_path(start, end, xs, ys, obstacles)
+}
+
+fn visibility_path(
+    start: Point,
+    end: Point,
+    mut xs: Vec<f32>,
+    mut ys: Vec<f32>,
+    obstacles: &[NodeRect],
+) -> Vec<Point> {
+    xs.sort_by(f32::total_cmp);
+    xs.dedup();
+    ys.sort_by(f32::total_cmp);
+    ys.dedup();
+    let index = |point: Point| {
+        ys.iter().position(|y| *y == point.y).expect("known y") * xs.len()
+            + xs.iter().position(|x| *x == point.x).expect("known x")
+    };
+    let point = |i: usize| Point {
+        x: xs[i % xs.len()],
+        y: ys[i / xs.len()],
+    };
+    let (first, last) = (index(start), index(end));
+    let mut costs = vec![f32::INFINITY; xs.len() * ys.len()];
+    let mut previous = vec![usize::MAX; costs.len()];
+    let mut queue = BinaryHeap::new();
+    costs[first] = 0.0;
+    queue.push(Reverse((0_u32, 0_u32, first)));
+    while let Some(Reverse((_, bits, i))) = queue.pop() {
+        let cost = f32::from_bits(bits);
+        if cost > costs[i] {
+            continue;
+        }
+        if i == last {
+            let mut path = vec![end];
+            let mut at = i;
+            while previous[at] != usize::MAX {
+                at = previous[at];
+                path.push(point(at));
+            }
+            path.reverse();
+            return simplify_path(path);
+        }
+        let p = point(i);
+        let (x, y) = (i % xs.len(), i / xs.len());
+        for (valid, next) in [
+            (x > 0, i.saturating_sub(1)),
+            (x + 1 < xs.len(), i + 1),
+            (y > 0, i.saturating_sub(xs.len())),
+            (y + 1 < ys.len(), i + xs.len()),
+        ] {
+            if !valid {
+                continue;
+            }
+            let q = point(next);
+            if !clear_path(&[p, q], obstacles) {
+                continue;
+            }
+            let next_cost = cost + (p.x - q.x).abs() + (p.y - q.y).abs();
+            if next_cost < costs[next] {
+                costs[next] = next_cost;
+                previous[next] = i;
+                let estimate = next_cost + (q.x - end.x).abs() + (q.y - end.y).abs();
+                queue.push(Reverse((estimate.to_bits(), next_cost.to_bits(), next)));
+            }
+        }
+    }
+    // An explicit user waypoint can lie inside a table. Preserve that position
+    // rather than silently moving the user's route to manufacture a valid path.
+    vec![
+        start,
+        Point {
+            x: end.x,
+            y: start.y,
+        },
+        end,
+    ]
+}
+
+/// Reconnect a full route to current table anchors without moving its interior
+/// waypoints. Used by both manual routing and live drag previews; no worker wait.
+pub fn reconnect_route_endpoints(
+    points: &[Point],
+    source: (NodeRect, TableAnchor),
+    target: (NodeRect, TableAnchor),
+    obstacles: &[NodeRect],
+) -> Vec<Point> {
+    let start = resolve_table_anchor(source.0, source.1);
+    let end = resolve_table_anchor(target.0, target.1);
+    let outward = |point: Point, side: AnchorSide, distance: f32| {
+        let normal = side.normal();
+        Point {
+            x: point.x + normal.x * distance,
+            y: point.y + normal.y * distance,
+        }
+    };
+    let stub = |point: Point, side: AnchorSide| {
+        let mut distance = 24.0_f32;
+        for rect in obstacles {
+            let gap = match side {
+                AnchorSide::Right
+                    if point.y > rect.origin.y
+                        && point.y < rect.bottom()
+                        && rect.origin.x >= point.x =>
+                {
+                    Some(rect.origin.x - point.x)
+                }
+                AnchorSide::Left
+                    if point.y > rect.origin.y
+                        && point.y < rect.bottom()
+                        && rect.right() <= point.x =>
+                {
+                    Some(point.x - rect.right())
+                }
+                AnchorSide::Bottom
+                    if point.x > rect.origin.x
+                        && point.x < rect.right()
+                        && rect.origin.y >= point.y =>
+                {
+                    Some(rect.origin.y - point.y)
+                }
+                AnchorSide::Top
+                    if point.x > rect.origin.x
+                        && point.x < rect.right()
+                        && rect.bottom() <= point.y =>
+                {
+                    Some(point.y - rect.bottom())
+                }
+                _ => None,
+            };
+            if let Some(gap) = gap {
+                distance = distance.min(gap * 0.5);
+            }
+        }
+        outward(point, side, distance)
+    };
+    let (a, b) = (stub(start, source.1.side), stub(end, target.1.side));
+    let interior = if points.len() > 2 {
+        &points[1..points.len() - 1]
+    } else {
+        &[]
+    };
+    if start == end && source.1.side == target.1.side && interior.is_empty() {
+        let normal = source.1.side.normal();
+        for direction in [1.0, -1.0] {
+            let tangent = Point {
+                x: -normal.y * PORT_GAP * direction,
+                y: normal.x * PORT_GAP * direction,
+            };
+            let stub_length = (a.x - start.x).abs() + (a.y - start.y).abs();
+            let far = outward(a, source.1.side, PORT_GAP.min(stub_length * 0.5));
+            let loop_path = vec![
+                start,
+                a,
+                Point {
+                    x: a.x + tangent.x,
+                    y: a.y + tangent.y,
+                },
+                Point {
+                    x: far.x + tangent.x,
+                    y: far.y + tangent.y,
+                },
+                far,
+                end,
+            ];
+            if clear_path(&loop_path, obstacles) {
+                return loop_path;
+            }
+        }
+    }
+    let mut result = vec![start, a];
+    if let (Some(&first), Some(&last)) = (interior.first(), interior.last()) {
+        result.extend(connect_orthogonal(a, first, obstacles).into_iter().skip(1));
+        result.extend_from_slice(&interior[1..]);
+        result.extend(connect_orthogonal(last, b, obstacles).into_iter().skip(1));
+    } else {
+        result.extend(connect_orthogonal(a, b, obstacles).into_iter().skip(1));
+    }
+    result.push(end);
+    result.dedup();
+    result
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutNode {
     pub id: String,
@@ -735,6 +1068,7 @@ pub fn simplify_path(points: Vec<Point>) -> Vec<Point> {
 
 pub fn route_diagram(input: &LayoutInput) -> LayoutResult {
     let rects: BTreeMap<_, _> = input.nodes.iter().map(|n| (n.id.clone(), n.rect)).collect();
+    let obstacles: Vec<_> = rects.values().copied().collect();
     struct PortRequest {
         edge: String,
         source: bool,
@@ -742,6 +1076,7 @@ pub fn route_diagram(input: &LayoutInput) -> LayoutResult {
         preferred_y: f32,
     }
     let mut slots: BTreeMap<(String, bool), Vec<PortRequest>> = BTreeMap::new();
+    let mut ports = BTreeMap::new();
     let mut sides = BTreeMap::new();
     for e in &input.edges {
         let (a, b) = (rects[&e.source], rects[&e.target]);
@@ -751,27 +1086,50 @@ pub fn route_diagram(input: &LayoutInput) -> LayoutResult {
         let (left, right) = manual
             .map(|m| (m.source_left, m.target_right))
             .unwrap_or((left, right));
-        sides.insert(e.id.clone(), (left, right));
-        slots
-            .entry((e.source.clone(), left))
-            .or_default()
-            .push(PortRequest {
-                edge: e.id.clone(),
-                source: true,
-                opposite_y: b.origin.y,
-                preferred_y: e.source_y,
-            });
-        slots
-            .entry((e.target.clone(), !right))
-            .or_default()
-            .push(PortRequest {
-                edge: e.id.clone(),
-                source: false,
-                opposite_y: a.origin.y,
-                preferred_y: e.target_y,
-            });
+        let source_anchor = manual.and_then(|route| route.source_anchor);
+        let target_anchor = manual.and_then(|route| route.target_anchor);
+        sides.insert(
+            e.id.clone(),
+            (
+                source_anchor.map(|anchor| anchor.side).unwrap_or(if left {
+                    AnchorSide::Left
+                } else {
+                    AnchorSide::Right
+                }),
+                target_anchor.map(|anchor| anchor.side).unwrap_or(if right {
+                    AnchorSide::Right
+                } else {
+                    AnchorSide::Left
+                }),
+            ),
+        );
+        if let Some(anchor) = source_anchor {
+            ports.insert((e.id.clone(), true), resolve_table_anchor(a, anchor));
+        } else {
+            slots
+                .entry((e.source.clone(), left))
+                .or_default()
+                .push(PortRequest {
+                    edge: e.id.clone(),
+                    source: true,
+                    opposite_y: b.origin.y,
+                    preferred_y: e.source_y,
+                });
+        }
+        if let Some(anchor) = target_anchor {
+            ports.insert((e.id.clone(), false), resolve_table_anchor(b, anchor));
+        } else {
+            slots
+                .entry((e.target.clone(), !right))
+                .or_default()
+                .push(PortRequest {
+                    edge: e.id.clone(),
+                    source: false,
+                    opposite_y: a.origin.y,
+                    preferred_y: e.target_y,
+                });
+        }
     }
-    let mut ports = BTreeMap::new();
     for ((node, left), mut members) in slots {
         members.sort_by(|a, b| {
             a.preferred_y
@@ -815,28 +1173,94 @@ pub fn route_diagram(input: &LayoutInput) -> LayoutResult {
     let mut edges = BTreeMap::new();
     for e in &input.edges {
         let (start, end) = (ports[&(e.id.clone(), true)], ports[&(e.id.clone(), false)]);
-        let (left, right) = sides[&e.id];
+        let (source_side, target_side) = sides[&e.id];
         let points = if let Some(manual) = input.manual.get(&e.id).filter(|r| !r.points.is_empty())
         {
             let mut p = vec![start];
             p.extend(&manual.points);
             p.push(end);
-            p
+            if manual.source_anchor.is_some() || manual.target_anchor.is_some() {
+                reconnect_route_endpoints(
+                    &p,
+                    (
+                        rects[&e.source],
+                        project_table_anchor(rects[&e.source], start, Some(source_side)),
+                    ),
+                    (
+                        rects[&e.target],
+                        project_table_anchor(rects[&e.target], end, Some(target_side)),
+                    ),
+                    &obstacles,
+                )
+            } else {
+                // Legacy user-defined trunks retain their exact stored shape.
+                p
+            }
+        } else if e.source == e.target && start == end && source_side == target_side {
+            reconnect_route_endpoints(
+                &[],
+                (
+                    rects[&e.source],
+                    project_table_anchor(rects[&e.source], start, Some(source_side)),
+                ),
+                (
+                    rects[&e.target],
+                    project_table_anchor(rects[&e.target], end, Some(target_side)),
+                ),
+                &obstacles,
+            )
         } else {
-            let stub = |p: Point, left: bool| {
-                let x = if left {
-                    ((p.x - 24.0 - grid.origin.x) / grid.step).floor() * grid.step + grid.origin.x
-                } else {
-                    ((p.x + 24.0 - grid.origin.x) / grid.step).ceil() * grid.step + grid.origin.x
+            let stub = |p: Point, side: AnchorSide| {
+                let before = |value: f32, origin: f32| {
+                    ((value - 24.0 - origin) / grid.step).floor() * grid.step + origin
                 };
-                Point { x, y: p.y }
+                let after = |value: f32, origin: f32| {
+                    ((value + 24.0 - origin) / grid.step).ceil() * grid.step + origin
+                };
+                match side {
+                    AnchorSide::Left => Point {
+                        x: before(p.x, grid.origin.x),
+                        y: p.y,
+                    },
+                    AnchorSide::Right => Point {
+                        x: after(p.x, grid.origin.x),
+                        y: p.y,
+                    },
+                    AnchorSide::Top => Point {
+                        x: p.x,
+                        y: before(p.y, grid.origin.y),
+                    },
+                    AnchorSide::Bottom => Point {
+                        x: p.x,
+                        y: after(p.y, grid.origin.y),
+                    },
+                }
             };
-            let (a, b) = (stub(start, left), stub(end, !right));
+            let (a, b) = (stub(start, source_side), stub(end, target_side));
             let (ga, gb) = (grid.point(grid.index(a)), grid.point(grid.index(b)));
             let mut p = vec![start, a, ga];
             p.extend(grid.path(ga, gb));
             p.extend([gb, b, end]);
-            simplify_path(p)
+            let path = simplify_path(p);
+            let edited_anchor = input.manual.get(&e.id).is_some_and(|route| {
+                route.source_anchor.is_some() || route.target_anchor.is_some()
+            });
+            if edited_anchor && !clear_path(&path, &obstacles) {
+                reconnect_route_endpoints(
+                    &[],
+                    (
+                        rects[&e.source],
+                        project_table_anchor(rects[&e.source], start, Some(source_side)),
+                    ),
+                    (
+                        rects[&e.target],
+                        project_table_anchor(rects[&e.target], end, Some(target_side)),
+                    ),
+                    &obstacles,
+                )
+            } else {
+                path
+            }
         };
         edges.insert(
             e.id.clone(),

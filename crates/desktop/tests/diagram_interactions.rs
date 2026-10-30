@@ -137,6 +137,8 @@ fn pan_mode_selects_table_by_its_body_and_header_can_be_dragged() {
     view.prepare_geometry(&catalog, &layout);
     let mut initialized = false;
     let mut harness = Harness::builder()
+        // Routing settles asynchronously and can take more than four frames under load.
+        .with_max_steps(120)
         .with_size([1100.0, 700.0])
         .build_ui_state(
             move |ui, state: &mut State| {
@@ -476,4 +478,195 @@ fn column_text_is_emitted_at_every_zoom_and_loupe_exposes_full_type() {
     harness.key_combination_modifiers(egui::Modifiers::CTRL, &[egui::Key::A]);
     harness.run();
     assert_eq!(harness.state().view.selected.len(), 1);
+}
+
+#[test]
+fn both_relation_endpoints_follow_perimeter_drag_before_release_and_undo_once() {
+    for manual_points in [
+        vec![],
+        vec![Point { x: 530.0, y: 170.0 }, Point { x: 530.0, y: 390.0 }],
+    ] {
+        let source = ObjectId::new("main", "source");
+        let target = ObjectId::new("main", "target");
+        let catalog = Catalog {
+            tables: vec![
+                Table {
+                    stable_id: "source".into(),
+                    id: source.clone(),
+                    columns: vec![Column::new("id", "integer", false)],
+                    foreign_keys: vec![ForeignKey {
+                        id: "fk".into(),
+                        source,
+                        target: target.clone(),
+                        columns: vec!["id".into()],
+                        target_columns: vec!["id".into()],
+                        ..ForeignKey::default()
+                    }],
+                    ..Table::default()
+                },
+                Table {
+                    stable_id: "target".into(),
+                    id: target,
+                    columns: vec![Column::new("id", "integer", false)],
+                    ..Table::default()
+                },
+            ],
+            ..Catalog::default()
+        };
+        let original_catalog = catalog.clone();
+        let mut layout = Diagram::default();
+        layout
+            .positions
+            .insert("source".into(), Point { x: 100.0, y: 120.0 });
+        layout
+            .positions
+            .insert("target".into(), Point { x: 750.0, y: 350.0 });
+        layout.routes.insert(
+            "fk".into(),
+            Route {
+                source_anchor: Some(TableAnchor {
+                    side: AnchorSide::Right,
+                    offset: 48.0,
+                }),
+                target_anchor: Some(TableAnchor {
+                    side: AnchorSide::Left,
+                    offset: 48.0,
+                }),
+                points: manual_points.clone(),
+                ..Route::default()
+            },
+        );
+        let positions = layout.positions.clone();
+        let mut view = DiagramView::default();
+        view.fit = false;
+        view.zoom = 1.0;
+        view.selected_route = Some("fk".into());
+        view.prepare_geometry(&catalog, &layout);
+        let mut initialized = false;
+        let mut harness = Harness::builder()
+            // Routing settles asynchronously and can take more than four frames under load.
+            .with_max_steps(120)
+            .with_size([1400.0, 850.0])
+            .build_ui_state(
+                move |ui, state: &mut State| {
+                    if !initialized {
+                        kortex_supervisor::theme::apply(ui.ctx());
+                        initialized = true;
+                    }
+                    mcd::show(
+                        ui,
+                        &state.catalog,
+                        &mut state.layout,
+                        &mut state.history,
+                        &mut state.view,
+                        None,
+                    );
+                },
+                State {
+                    catalog,
+                    layout,
+                    history: LayoutHistory::default(),
+                    view,
+                },
+            );
+        harness.run();
+        for is_source in [true, false] {
+            for side in [
+                AnchorSide::Top,
+                AnchorSide::Bottom,
+                AnchorSide::Left,
+                AnchorSide::Right,
+            ] {
+                let table = if is_source { "source" } else { "target" };
+                let node = NodeRect {
+                    origin: positions[table],
+                    size: Point {
+                        x: TABLE_WIDTH,
+                        y: 96.0,
+                    },
+                };
+                let before = harness.state().layout.clone();
+                let route = &before.routes["fk"];
+                let current = if is_source {
+                    route.source_anchor.unwrap()
+                } else {
+                    route.target_anchor.unwrap()
+                };
+                let expected = TableAnchor {
+                    side,
+                    offset: if matches!(side, AnchorSide::Top | AnchorSide::Bottom) {
+                        160.0
+                    } else {
+                        48.0
+                    },
+                };
+                let start = resolve_table_anchor(node, current);
+                let end = resolve_table_anchor(node, expected);
+                let canvas = harness.state().view.canvas;
+                let from = canvas.min + egui::vec2(start.x, start.y);
+                let to = canvas.min + egui::vec2(end.x, end.y);
+                harness.drag_at(from);
+                harness.step();
+                harness.hover_at(to);
+                harness.step();
+                let edited = &harness.state().layout.routes["fk"];
+                assert_eq!(
+                    if is_source {
+                        edited.source_anchor
+                    } else {
+                        edited.target_anchor
+                    },
+                    Some(expected),
+                    "{side:?} source={is_source}"
+                );
+                assert_eq!(
+                    harness.state().layout.positions,
+                    positions,
+                    "anchor drag moved a table"
+                );
+                assert_eq!(edited.points, manual_points);
+                let text_label = if is_source { "0..N" } else { "1..1" };
+                let n = side.normal();
+                let tangent = egui::vec2(-n.y, n.x) * if is_source { 1.0 } else { -1.0 };
+                let normal = egui::vec2(n.x, n.y);
+                let center = to
+                    + normal * (6.0 + (normal.x.abs() * 40.0 + normal.y.abs() * 20.0) / 2.0)
+                    + tangent * (4.0 + (tangent.x.abs() * 40.0 + tangent.y.abs() * 20.0) / 2.0);
+                assert!(
+                    harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .any(|clipped| match &clipped.shape {
+                            egui::epaint::Shape::Text(text)
+                                if text.galley.job.text == text_label =>
+                                (text.pos + text.galley.size() / 2.0 - center).length() < 0.1,
+                            _ => false,
+                        }),
+                    "badge did not follow the held drag to {side:?}"
+                );
+                assert!(
+                    harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .any(|clipped| match &clipped.shape {
+                            egui::epaint::Shape::LineSegment { points, .. } => points.contains(&to),
+                            _ => false,
+                        }),
+                    "line did not follow the held drag"
+                );
+                harness.drop_at(to);
+                harness.run();
+                let after = harness.state().layout.clone();
+                let state = harness.state_mut();
+                assert!(state.history.undo(&mut state.layout));
+                assert_eq!(state.layout, before);
+                assert!(state.history.redo(&mut state.layout));
+                assert_eq!(state.layout, after);
+                harness.run();
+            }
+        }
+        assert_eq!(harness.state().catalog, original_catalog);
+    }
 }

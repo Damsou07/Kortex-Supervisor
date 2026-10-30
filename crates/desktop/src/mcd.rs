@@ -19,6 +19,12 @@ pub enum InteractionMode {
     Select,
 }
 
+struct AnchorDrag {
+    relation: String,
+    source: bool,
+    recorded: bool,
+}
+
 pub struct DiagramView {
     pub zoom: f32,
     pub pan: Vec2,
@@ -30,8 +36,6 @@ pub struct DiagramView {
     pub canvas: Rect,
     pub groups_open: bool,
     pub group_draft: Option<GroupDraft>,
-    cardinalities_open: bool,
-    overflow_cardinalities: Vec<String>,
     group_search: String,
     member_search: String,
     selection_start: Option<Pos2>,
@@ -40,6 +44,7 @@ pub struct DiagramView {
     sizes: std::collections::BTreeMap<String, Point>,
     scope: Option<BTreeSet<String>>,
     group_previous_mode: Option<InteractionMode>,
+    anchor_drag: Option<AnchorDrag>,
 }
 impl Default for DiagramView {
     fn default() -> Self {
@@ -54,8 +59,6 @@ impl Default for DiagramView {
             canvas: Rect::NOTHING,
             groups_open: false,
             group_draft: None,
-            cardinalities_open: false,
-            overflow_cardinalities: Vec::new(),
             group_search: String::new(),
             member_search: String::new(),
             selection_start: None,
@@ -64,6 +67,7 @@ impl Default for DiagramView {
             sizes: Default::default(),
             scope: None,
             group_previous_mode: None,
+            anchor_drag: None,
         }
     }
 }
@@ -150,6 +154,9 @@ pub fn show(
     view.selected
         .retain(|id| catalog.tables.iter().any(|t| &t.stable_id == id));
     let dragging = ui.input(|i| i.pointer.any_down());
+    if !ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released()) {
+        view.anchor_drag = None;
+    }
     if view.cache.update(catalog, layout, history, dragging) {
         view.fit = true;
         view.selected.clear();
@@ -264,16 +271,6 @@ pub fn show(
         }
         theme::diagram_theme_selector(ui);
         columns::legend(ui);
-        if ui
-            .button("Cardinalités")
-            .on_hover_text(format!(
-                "{} cardinalités masquées sur le schéma",
-                view.overflow_cardinalities.len()
-            ))
-            .clicked()
-        {
-            view.cardinalities_open = true;
-        }
     });
     let palette = theme::diagram_palette(ui.ctx());
     if view.groups_open {
@@ -316,6 +313,7 @@ pub fn show(
         }
         if shortcuts::consume(ui.ctx(), Command::Cancel) {
             view.selection_start = None;
+            view.anchor_drag = None;
             view.finish_group();
             view.selected_route = None;
         }
@@ -337,13 +335,14 @@ pub fn show(
         view.pan = canvas.size() / 2.0 - b.center().to_vec2() * view.zoom;
         view.fit = false;
     }
-    if background.dragged_by(egui::PointerButton::Middle)
-        || (view.mode == InteractionMode::Pan
-            && background.dragged_by(egui::PointerButton::Primary))
+    if view.anchor_drag.is_none()
+        && (background.dragged_by(egui::PointerButton::Middle)
+            || (view.mode == InteractionMode::Pan
+                && background.dragged_by(egui::PointerButton::Primary)))
     {
         view.pan += ui.input(|i| i.pointer.delta());
     }
-    if background.clicked() && !ui.input(|i| i.modifiers.shift) {
+    if view.anchor_drag.is_none() && background.clicked() && !ui.input(|i| i.modifiers.shift) {
         view.selected.clear();
         view.selected_route = None;
         view.sync_members();
@@ -465,13 +464,29 @@ pub fn show(
         }
     }
     let mut cardinality_labels = Vec::new();
+    let mut anchor_handles = Vec::new();
+    let mut anchor_dots = Vec::new();
+    let mut anchor_dragging = false;
+    let node_rects: Vec<_> = catalog
+        .tables
+        .iter()
+        .map(|t| NodeRect {
+            origin: layout
+                .positions
+                .get(&t.stable_id)
+                .copied()
+                .unwrap_or_default(),
+            size: Point {
+                x: WIDTH,
+                y: height(t, view),
+            },
+        })
+        .collect();
     for (source, target, fk, source_visible, target_visible) in
         relations::relations(catalog, subset)
     {
         let external = !source_visible || !target_visible;
-        let src_rect = table_rect(source, layout, canvas.min, view);
-        let dst_rect = table_rect(target, layout, canvas.min, view);
-        let route = layout.routes.get(&fk.id).cloned().unwrap_or_else(|| {
+        let mut route = layout.routes.get(&fk.id).cloned().unwrap_or_else(|| {
             let Some(edge) = view.cache.geometry.edges.get(&fk.id) else {
                 return Route::default();
             };
@@ -484,10 +499,8 @@ pub fn show(
                 return Route::default();
             };
             Route {
-                source_left: a.x < src.origin.x + src.size.x / 2.0,
-                target_right: b.x > dst.origin.x + dst.size.x / 2.0,
-                source_y: Some(a.y - src.origin.y),
-                target_y: Some(b.y - dst.origin.y),
+                source_anchor: Some(project_table_anchor(*src, *a, None)),
+                target_anchor: Some(project_table_anchor(*dst, *b, None)),
                 ..Route::default()
             }
         });
@@ -501,106 +514,184 @@ pub fn show(
             .first()
             .and_then(|name| target.column_index(name))
             .unwrap_or(0);
-        let source_anchor = egui::pos2(
-            if route.source_left {
-                src_rect.left()
-            } else {
-                src_rect.right()
+        let source_node = NodeRect {
+            origin: layout
+                .positions
+                .get(&source.stable_id)
+                .copied()
+                .unwrap_or_default(),
+            size: Point {
+                x: WIDTH,
+                y: height(source, view),
             },
-            src_rect.top()
-                + route
-                    .source_y
-                    .unwrap_or(48.0 + src_row as f32 * 24.0)
-                    .clamp(0.0, height(source, view))
-                    * view.zoom,
-        );
-        let target_anchor = egui::pos2(
-            if route.target_right {
-                dst_rect.right()
-            } else {
-                dst_rect.left()
+        };
+        let target_node = NodeRect {
+            origin: layout
+                .positions
+                .get(&target.stable_id)
+                .copied()
+                .unwrap_or_default(),
+            size: Point {
+                x: WIDTH,
+                y: height(target, view),
             },
-            dst_rect.top()
-                + route
-                    .target_y
-                    .unwrap_or(48.0 + dst_row as f32 * 24.0)
-                    .clamp(0.0, height(target, view))
-                    * view.zoom,
-        );
-        // Boundary stubs point outward from the visible table port.
-        let stub_length = 90.0 * view.zoom;
+        };
+        let mut source_port = route.source_anchor.unwrap_or(TableAnchor {
+            side: if route.source_left {
+                AnchorSide::Left
+            } else {
+                AnchorSide::Right
+            },
+            offset: route
+                .source_y
+                .unwrap_or(48.0 + src_row as f32 * ROW_HEIGHT)
+                .clamp(12.0, source_node.size.y - 12.0),
+        });
+        let mut target_port = route.target_anchor.unwrap_or(TableAnchor {
+            side: if route.target_right {
+                AnchorSide::Right
+            } else {
+                AnchorSide::Left
+            },
+            offset: route
+                .target_y
+                .unwrap_or(48.0 + dst_row as f32 * ROW_HEIGHT)
+                .clamp(12.0, target_node.size.y - 12.0),
+        });
+        // Resolve input before drawing: the line, arrow and badge share this frame's endpoint.
+        if view.selected_route.as_deref() == Some(&fk.id)
+            && view.mode == InteractionMode::Pan
+            && !external
+        {
+            for is_source in [true, false] {
+                let (node, port) = if is_source {
+                    (source_node, source_port)
+                } else {
+                    (target_node, target_port)
+                };
+                let p = world_to_screen(resolve_table_anchor(node, port), canvas.min, view);
+                let handle = Rect::from_center_size(p, egui::vec2(12.0, 12.0));
+                if !handle.intersects(canvas) {
+                    continue;
+                }
+                anchor_handles.push(handle);
+                let _response = ui.interact(
+                    handle.intersect(canvas),
+                    egui::Id::unique(("anchor", &fk.id, is_source)),
+                    Sense::drag(),
+                );
+                // Capture the endpoint gesture explicitly. Table headers and
+                // route segments overlap this small hit area at top/bottom ports.
+                let pointer = ui.input(|i| i.pointer.interact_pos());
+                if ui.input(|i| i.pointer.primary_pressed())
+                    && pointer.is_some_and(|p| {
+                        handle.contains(p) && ui.ctx().layer_id_at(p) == Some(ui.layer_id())
+                    })
+                {
+                    view.anchor_drag = Some(AnchorDrag {
+                        relation: fk.id.clone(),
+                        source: is_source,
+                        recorded: false,
+                    });
+                }
+                let pointer_world = pointer.map(|p| screen_to_world(p, canvas.min, view));
+                let active = view
+                    .anchor_drag
+                    .as_mut()
+                    .filter(|drag| drag.relation == fk.id && drag.source == is_source);
+                if let Some(drag) = active {
+                    anchor_dragging = true;
+                    if let Some(pointer) = pointer_world {
+                        let projected = project_table_anchor(node, pointer, Some(port.side));
+                        if projected != port {
+                            if !drag.recorded {
+                                history.record(layout);
+                                drag.recorded = true;
+                            }
+                            if is_source {
+                                source_port = projected;
+                            } else {
+                                target_port = projected;
+                            }
+                            // Freeze the opposite automatic port on the first edit.
+                            route.source_anchor = Some(source_port);
+                            route.target_anchor = Some(target_port);
+                            layout.routes.insert(fk.id.clone(), route.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let source_world = resolve_table_anchor(source_node, source_port);
+        let target_world = resolve_table_anchor(target_node, target_port);
+        let source_anchor = world_to_screen(source_world, canvas.min, view);
+        let target_anchor = world_to_screen(target_world, canvas.min, view);
+        let normal = |side: AnchorSide| {
+            let n = side.normal();
+            egui::vec2(n.x, n.y)
+        };
         let (start, end) = if !source_visible {
             (
-                target_anchor
-                    + egui::vec2(
-                        if route.target_right {
-                            stub_length
-                        } else {
-                            -stub_length
-                        },
-                        0.0,
-                    ),
+                target_anchor + normal(target_port.side) * 90.0 * view.zoom,
                 target_anchor,
             )
         } else if !target_visible {
             (
                 source_anchor,
-                source_anchor
-                    + egui::vec2(
-                        if route.source_left {
-                            -stub_length
-                        } else {
-                            stub_length
-                        },
-                        0.0,
-                    ),
+                source_anchor + normal(source_port.side) * 90.0 * view.zoom,
             )
         } else {
             (source_anchor, target_anchor)
         };
-        let mut points = if !route.points.is_empty() {
-            let mut p = vec![start];
-            p.extend(
-                route
-                    .points
-                    .iter()
-                    .map(|p| world_to_screen(*p, canvas.min, view)),
-            );
-            p.push(end);
-            p
-        } else if let Some(edge) = view.cache.geometry.edges.get(&fk.id) {
-            let mut p: Vec<_> = edge
-                .points
-                .iter()
-                .map(|p| world_to_screen(*p, canvas.min, view))
-                .collect();
-            // Keep endpoints attached while a fresh routing job is pending.
-            if let (Some(a), Some(b)) = (p.first().copied(), p.last().copied()) {
-                let source_size = view.cache.geometry.rects.get(&source.stable_id);
-                let target_size = view.cache.geometry.rects.get(&target.stable_id);
-                let shift = |r: Option<&NodeRect>, t: &Table| {
-                    r.and_then(|r| {
-                        layout
-                            .positions
-                            .get(&t.stable_id)
-                            .map(|p| egui::vec2(p.x - r.origin.x, p.y - r.origin.y) * view.zoom)
-                    })
-                    .unwrap_or_default()
-                };
-                let da = shift(source_size, source);
-                let db = shift(target_size, target);
-                p[0] = a + da;
-                let last = p.len() - 1;
-                p[last] = b + db;
-            }
-            p
+        let points = if external {
+            vec![start, end]
         } else {
-            let mid = (start.x + end.x) / 2.0;
-            vec![start, egui::pos2(mid, start.y), egui::pos2(mid, end.y), end]
+            let world_points = if !route.points.is_empty() {
+                let mut points = vec![source_world];
+                points.extend(&route.points);
+                points.push(target_world);
+                reconnect_route_endpoints(
+                    &points,
+                    (source_node, source_port),
+                    (target_node, target_port),
+                    &node_rects,
+                )
+            } else if let Some(edge) = view.cache.geometry.edges.get(&fk.id) {
+                if edge.points.first() == Some(&source_world)
+                    && edge.points.last() == Some(&target_world)
+                {
+                    edge.points.clone()
+                } else {
+                    let interior_obstructed = edge.points.windows(2).any(|s| {
+                        node_rects
+                            .iter()
+                            .any(|r| r.segment_crosses_interior(s[0], s[1]))
+                    });
+                    let trunk = if interior_obstructed {
+                        &[][..]
+                    } else {
+                        edge.points.as_slice()
+                    };
+                    reconnect_route_endpoints(
+                        trunk,
+                        (source_node, source_port),
+                        (target_node, target_port),
+                        &node_rects,
+                    )
+                }
+            } else {
+                reconnect_route_endpoints(
+                    &[],
+                    (source_node, source_port),
+                    (target_node, target_port),
+                    &node_rects,
+                )
+            };
+            world_points
+                .into_iter()
+                .map(|p| world_to_screen(p, canvas.min, view))
+                .collect()
         };
-        if external {
-            points = vec![start, end];
-        }
         let start = points.first().copied().unwrap_or(start);
         let end = points.last().copied().unwrap_or(end);
         let selected = view.selected_route.as_deref() == Some(&fk.id);
@@ -647,13 +738,21 @@ pub fn show(
                     .routes
                     .entry(fk.id.clone())
                     .or_insert_with(|| route.clone());
-                if route.points.is_empty() {
+                let insertion = if route.points.is_empty() {
                     route.points = points[1..points.len() - 1]
                         .iter()
                         .map(|p| screen_to_world(*p, canvas.min, view))
                         .collect();
-                }
-                route.points.insert(segment.min(route.points.len()), p);
+                    segment.min(route.points.len())
+                } else {
+                    let manual: Vec<_> = route
+                        .points
+                        .iter()
+                        .map(|p| world_to_screen(*p, canvas.min, view))
+                        .collect();
+                    relations::waypoint_insertion_index(&points, &manual, segment)
+                };
+                route.points.insert(insertion, p);
                 view.selected_route = Some(fk.id.clone());
             }
             response.on_hover_text(format!(
@@ -703,58 +802,48 @@ pub fn show(
             arrowheads.push((end, direction, color, (8.0 * view.zoom).clamp(0.8, 8.0)));
         }
         let (reference, inverse) = cardinalities(source, fk);
-        let source_left = if source_visible {
-            route.source_left
+        let source_side = if source_visible {
+            source_port.side
         } else {
-            start.x < end.x
+            target_port.side
         };
-        let target_right = if target_visible {
-            route.target_right
+        let target_side = if target_visible {
+            target_port.side
         } else {
-            end.x > start.x
+            source_port.side
         };
-        cardinality_labels.push((
-            start + egui::vec2(if source_left { -5.0 } else { 5.0 }, 5.0),
-            if source_left {
-                Align2::RIGHT_TOP
+        let priority = if selected {
+            0_u8
+        } else if hovered {
+            1
+        } else {
+            2
+        };
+        for (is_source, endpoint, side, text) in [
+            (true, start, source_side, inverse.label()),
+            (false, end, target_side, reference.label()),
+        ] {
+            cardinality_labels.push((
+                priority,
+                fk.id.clone(),
+                !is_source,
+                relations::badge_rect(endpoint, side, is_source),
+                text,
+            ));
+        }
+        if external {
+            let (endpoint, side, remote_source, name) = if source_visible {
+                (end, source_port.side, false, target.id.label())
             } else {
-                Align2::LEFT_TOP
-            },
-            if source_visible {
-                inverse.label().into()
-            } else {
-                format!("{} → {}", source.id.name, inverse.label())
-            },
-            relations::overflow_description(
-                source,
-                target,
-                fk,
-                &format!("côté source : {}", inverse.label()),
-                source_visible,
-                target_visible,
-            ),
-        ));
-        cardinality_labels.push((
-            end + egui::vec2(if target_right { 5.0 } else { -5.0 }, -5.0),
-            if target_right {
-                Align2::LEFT_BOTTOM
-            } else {
-                Align2::RIGHT_BOTTOM
-            },
-            if target_visible {
-                reference.label().into()
-            } else {
-                format!("{} → {}", reference.label(), target.id.name)
-            },
-            relations::overflow_description(
-                source,
-                target,
-                fk,
-                &format!("côté cible : {}", reference.label()),
-                source_visible,
-                target_visible,
-            ),
-        ));
+                (start, target_port.side, true, source.id.label())
+            };
+            let font = FontId::proportional(12.0);
+            let text = columns::ellipsize(&painter, &name, &font, 180.0);
+            let galley = painter.layout_no_wrap(text, font, palette.muted);
+            let rect =
+                relations::endpoint_label_rect(endpoint, side, !remote_source, galley.size());
+            painter.galley(rect.min, galley, palette.muted);
+        }
         if selected && view.mode == InteractionMode::Pan && !external {
             for (i, p) in route.points.iter().enumerate() {
                 let screen = world_to_screen(*p, canvas.min, view);
@@ -788,44 +877,17 @@ pub fn show(
                     break;
                 }
             }
-            for (is_source, p) in [(true, start), (false, end)] {
-                let handle = Rect::from_center_size(p, egui::vec2(12.0, 12.0));
-                if !handle.intersects(canvas) {
-                    continue;
-                }
-                painter.circle_filled(p, 4.0, palette.handle);
-                let r = ui.interact(
-                    handle.intersect(canvas),
-                    egui::Id::unique(("anchor", &fk.id, is_source)),
-                    Sense::drag(),
-                );
-                if r.drag_started() {
-                    history.record(layout);
-                }
-                if r.dragged()
-                    && let Some(pointer) = r.interact_pointer_pos()
-                {
-                    let route = layout
-                        .routes
-                        .entry(fk.id.clone())
-                        .or_insert_with(|| route.clone());
-                    if is_source {
-                        route.source_left = pointer.x < src_rect.center().x;
-                        route.source_y = Some(
-                            ((pointer.y - src_rect.top()) / view.zoom)
-                                .clamp(0.0, height(source, view)),
-                        );
-                    } else {
-                        route.target_right = pointer.x > dst_rect.center().x;
-                        route.target_y = Some(
-                            ((pointer.y - dst_rect.top()) / view.zoom)
-                                .clamp(0.0, height(target, view)),
-                        );
-                    }
+            for p in [start, end] {
+                if canvas.contains(p) {
+                    anchor_dots.push(p);
                 }
             }
         }
     }
+    let pointer_over_anchor = anchor_dragging
+        || ui
+            .input(|i| i.pointer.hover_pos())
+            .is_some_and(|p| anchor_handles.iter().any(|r| r.contains(p)));
     for table in &visible {
         let rect = table_rect(table, layout, canvas.min, view);
         if !rect.intersects(canvas) {
@@ -899,7 +961,9 @@ pub fn show(
         let header_response = ui.interact(
             header.intersect(canvas),
             egui::Id::unique(("table_header", &table.stable_id)),
-            if view.mode == InteractionMode::Pan {
+            if pointer_over_anchor {
+                Sense::hover()
+            } else if view.mode == InteractionMode::Pan {
                 Sense::click_and_drag()
             } else {
                 Sense::click()
@@ -909,7 +973,11 @@ pub fn show(
         let body_response = ui.interact(
             body.intersect(canvas),
             egui::Id::unique(("table_body", &table.stable_id)),
-            Sense::click(),
+            if pointer_over_anchor {
+                Sense::hover()
+            } else {
+                Sense::click()
+            },
         );
         let response = header_response.union(body_response);
         if response.clicked() {
@@ -977,63 +1045,32 @@ pub fn show(
             Stroke::new(1.3, color),
         );
     }
-    // Paint labels above table cards and keep those that cannot fit available in a list.
-    let font = FontId::monospace((12.0 * view.zoom).max(9.0));
-    let labels: Vec<_> = cardinality_labels
-        .into_iter()
-        .filter(|(anchor, _, _, _)| canvas.expand(20.0).contains(*anchor))
-        .map(
-            |(anchor, align, text, detail): (Pos2, Align2, String, String)| {
-                let galley = painter.layout_no_wrap(text, font.clone(), palette.cardinality);
-                let rect = align.anchor_rect(Rect::from_min_size(anchor, galley.size()));
-                (anchor, galley, rect, detail)
-            },
-        )
+    for point in anchor_dots {
+        painter.circle_filled(point, 4.0, palette.handle);
+    }
+    // Priority controls visibility only; badges never move away from their arrows.
+    cardinality_labels.sort_by(|a, b| (a.0, &a.1, a.2).cmp(&(b.0, &b.1, b.2)));
+    let preferred: Vec<_> = cardinality_labels.iter().map(|label| label.3).collect();
+    let table_obstacles: Vec<_> = visible
+        .iter()
+        .map(|t| table_rect(t, layout, canvas.min, view))
         .collect();
-    let preferred: Vec<_> = labels.iter().map(|(_, _, rect, _)| *rect).collect();
-    let mut overflow = Vec::new();
-    for ((anchor, galley, preferred, detail), placed) in labels
-        .into_iter()
-        .zip(relations::place_labels(&preferred, canvas))
-    {
+    for ((_, _, _, _, text), placed) in cardinality_labels.into_iter().zip(relations::place_labels(
+        &preferred,
+        canvas,
+        &table_obstacles,
+    )) {
         if !placed.is_finite() {
-            overflow.push(detail);
             continue;
         }
-        if placed != preferred {
-            painter.line_segment(
-                [anchor, placed.center()],
-                Stroke::new(0.8, palette.cardinality),
-            );
-        }
-        // A background keeps text legible if a displaced label crosses a card.
-        painter.rect_filled(placed.expand(1.0), 2.0, palette.canvas);
-        painter.galley(placed.min, galley, palette.cardinality);
-    }
-    if view.overflow_cardinalities != overflow {
-        view.overflow_cardinalities = overflow;
-        ui.ctx().request_repaint();
-    }
-    if view.cardinalities_open {
-        egui::Window::new("Cardinalités masquées")
-            .id(ui.scope_id().with("overflow_cardinalities"))
-            .open(&mut view.cardinalities_open)
-            .default_width(440.0)
-            .show(ui.ctx(), |ui| {
-                if view.overflow_cardinalities.is_empty() {
-                    ui.label("Toutes les cardinalités visibles tiennent sur le schéma.");
-                } else {
-                    ui.label("Ces cardinalités ne tiennent pas sur le schéma à ce zoom :");
-                    egui::ScrollArea::vertical()
-                        .max_height(400.0)
-                        .show(ui, |ui| {
-                            for detail in &view.overflow_cardinalities {
-                                ui.label(detail);
-                                ui.separator();
-                            }
-                        });
-                }
-            });
+        painter.rect_filled(placed, 2.0, palette.canvas);
+        let galley =
+            painter.layout_no_wrap(text.into(), FontId::monospace(12.0), palette.cardinality);
+        painter.galley(
+            placed.center() - galley.size() / 2.0,
+            galley,
+            palette.cardinality,
+        );
     }
     if let Some(start) = view.selection_start
         && let Some(end) = ui.input(|i| i.pointer.interact_pos())
@@ -1050,6 +1087,9 @@ pub fn show(
     if view.cache.busy() {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
+    }
+    if ui.input(|i| i.pointer.primary_released()) {
+        view.anchor_drag = None;
     }
     action
 }
